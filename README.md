@@ -12,7 +12,7 @@ The final goal is to understand the philosophy behind wifi standards design, and
 
 
 ----------
-#Milestones
+# Milestones
 of course all things down below are to be done by SDR, not wifi cards.
 
 + Receive correct data frames from commercial wifi cards. (It works!)
@@ -23,5 +23,5 @@ of course all things down below are to be done by SDR, not wifi cards.
 + FPGA/Hardware implementations (dream)
 
 ----------
-#Coding
+# Coding
 + Standard C++ or assembly, no external libraries.
