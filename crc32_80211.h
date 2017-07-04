@@ -1,6 +1,4 @@
 #pragma once
-#define CRC32_CCITT_SEED 0xFFFFFFFF
-#define CRC32C_PRELOAD 0xffffffff
 
 
 /*
@@ -66,10 +64,10 @@ static const uint32_t crc32_ccitt_table[256] = {
         0x2d02ef8d
 };
 
-uint32_t crc32_ccitt_seed(const uint8_t *buf, uint32_t len, uint32_t seed)
+static uint32_t crc32_80211(const uint8_t *buf, uint32_t len)
 {
   int i;
-  uint32_t crc32 = seed;
+  uint32_t crc32 = 0xffffffff;
  
   for (i = 0; i < len; i++)
   crc32 = crc32_ccitt_table[(crc32 ^ buf[i]) & 0xff] ^ (crc32 >> 8);

@@ -213,7 +213,6 @@ int main()
 	init_LTS();
 	init_scrambler();
 	init_interleaver_pattern();
-// 	scrambler_test();
 	FILE * f = fopen("testcases\\wifi_6mbps_1frame.pcm", "rb");
 	fseek(f, 0, SEEK_END);
 	int file_size = ftell(f);
@@ -233,7 +232,7 @@ int main()
 		s[i].image = data[i*2+0]/256 + n;
 	}
 
-	f =fopen("SortTraining.csv", "wb");
+	f =fopen("ShortTraining.csv", "wb");
 	fprintf(f, "N,P,A\n");
 
 	int Nwindow = 48;
@@ -383,7 +382,7 @@ int main()
 		//printf("LT[%d]=%.1f,%.1f, %.2f\n", i, lt_fft[i].real, lt_fft[i].image, lt_fft[i].argument());
 
 		float phase_diffs = phase_sub(LT_frequency_space[n].argument(), lt_rx_fft[n].argument());
-		float amplitude_normalizer = 10000/lt_rx_fft[n].magnitude();
+		float amplitude_normalizer = 1/lt_rx_fft[n].magnitude();
 
 		h[n] = complex::from_phase_magnitude(phase_diffs, amplitude_normalizer);
 
@@ -588,7 +587,7 @@ int main()
 	uint8_t out_bytes[4096];
 	descramble(service_and_data_decoded_bits, out_bytes, 24*data_symbol_count);
 
-	uint32_t crc = crc32_ccitt_seed(out_bytes+2, length-4, CRC32_CCITT_SEED);
+	uint32_t crc = crc32_80211(out_bytes+2, length-4);
 
 	printf("FCS(calculated)=0x%08x\n", crc);
 	printf("FCS(received)=0x%02x%02x%02x%02x\n", out_bytes[2+length-4+3], out_bytes[2+length-4+2], out_bytes[2+length-4+1], out_bytes[2+length-4+0]);
