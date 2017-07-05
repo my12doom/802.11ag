@@ -315,10 +315,10 @@ int main()
 	// use long training sequence to find first symbol
 	f =fopen("alignment.csv", "wb");
 	fprintf(f, "N,P,A\n");
-	float peak_v = 0;
-	int peak_pos = 0;
-	for(int n=100; n<360; n++)			// 160: number of sample of short training sequence
-										// 320: number of sample of long training sequence
+	float autocorrection_value[3] = {0};
+	int autocorrection_pos[3] = {0};
+	for(int n=80; n<320+50; n++)			// 160: number of sample of short training sequence
+		// 320: number of sample of long training sequence
 	{
 		complex a;
 		float p = 0;
@@ -328,17 +328,35 @@ int main()
 			p += (s[preamble_start+n+k] * s[preamble_start+n+k].conjugate()).real;
 		}
 
-		fprintf(f, "%d,%f\n", n, a.magnitude()/p);
-		if (a.magnitude()/p > peak_v)
+		float autocorelation = a.magnitude()/p;
+		fprintf(f, "%d,%f\n", n, autocorelation);
+
+		for(int i=0; i<3; i++)
 		{
-			peak_v = a.magnitude()/p;
-			peak_pos = n;
+			if (autocorelation > autocorrection_value[i])
+			{
+				for(int j=i+1; j<3; j++)
+				{
+					autocorrection_value[j] = autocorrection_value[j-1];
+					autocorrection_pos[j] = autocorrection_pos[j-1];
+				}
+
+				autocorrection_value[i] = autocorelation;
+				autocorrection_pos[i] = n;
+
+				break;
+			}
 		}
 	}
+
+	int peak_pos = 0;
+	for(int i=0; i<3; i++)
+		if (autocorrection_pos[i] > peak_pos)
+			peak_pos = autocorrection_pos[i];
 	fclose(f);
 
 // 	peak_pos += 64;
-	printf("long training sequence:%.3f @ %d of preamble\n", peak_v, peak_pos);
+	printf("long training sequence @ %d of preamble\n", peak_pos);
 	int symbol_start = preamble_start + peak_pos + 64;
 	printf("symbols start @ %d (%.1fus)\n", symbol_start, symbol_start/20.0f);
 
@@ -531,7 +549,7 @@ int main()
 
 	float idx[4] = {-21, -7, 7, 21};
 	float ki,bi;
-	line_fitting(idx, k, 4, &ki,&bi);
+	line_fitting(idx, k1, 4, &ki,&bi);
 
 	for(int i=-26; i<=26; i++)
 	{
@@ -562,13 +580,13 @@ int main()
 				continue;
 
 			int n = j>0?j:j+64;
-			if (n==7||n==21||n==-7||n==-21||n==64-7||n==64-21)
+			if ((n==7||n==21||n==-7||n==-21||n==64-7||n==64-21))
 				continue;
 
 			complex offset2(cos(phase_error[i][n]), -sin(phase_error[i][n]));
 			complex v = symbols[i][n] * offset2;
 
-			fprintf(csv, "%d,%f,%f\n", j, v.real, v.image);
+			fprintf(csv, "%d,%f,%f,%f\n", j, v.real, v.image, v.argument());
 			service_and_data_bits[pos++] = map_BPSK(v);
 		}
 
@@ -591,6 +609,10 @@ int main()
 
 	printf("FCS(calculated)=0x%08x\n", crc);
 	printf("FCS(received)=0x%02x%02x%02x%02x\n", out_bytes[2+length-4+3], out_bytes[2+length-4+2], out_bytes[2+length-4+1], out_bytes[2+length-4+0]);
+
+	f = fopen("data.bin", "wb");
+	fwrite(out_bytes+2, 1, length, f);
+	fclose(f);
 
 	printf("%dms\n", GetTickCount()-l);
 	return 0;
