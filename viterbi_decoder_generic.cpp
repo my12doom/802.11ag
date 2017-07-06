@@ -333,9 +333,10 @@ viterbi_decoder::viterbi_get_output_generic(unsigned char *mm0,
 	return bestmetric;
 }
 
-int viterbi_decoder::decode(uint8_t *in, uint8_t *output, int input_count) 
+int viterbi_decoder::decode(uint8_t *in, uint8_t *output, int input_count, int ntrace/* = 5*/) 
 {
 	reset();
+	d_ntraceback = ntrace;
 
 	int in_count = 0;
 	int out_count = 0;

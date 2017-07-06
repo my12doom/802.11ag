@@ -8,6 +8,8 @@
 #include "line_fitting.h"
 #include "viterbi_decoder.h"
 #include "crc32_80211.h"
+#include "common.h"
+#include "mapper.h"
 
 using namespace gr::ieee802_11;
 
@@ -48,6 +50,19 @@ int init_interleaver_pattern()
 	return 0;
 }
 
+int * modulation2inerleaver_pattern(modulation mod)
+{
+	if (mod == BPSK)
+		return interleave_pattern[0];
+	if (mod == QPSK)
+		return interleave_pattern[1];
+	if (mod == QAM16)
+		return interleave_pattern[2];
+	if (mod == QAM64)
+		return interleave_pattern[3];
+	return NULL;
+}
+
 void descramble (uint8_t *decoded_bits, uint8_t *out_bytes, int bit_count) {
 
 	int state = 0;
@@ -76,27 +91,6 @@ uint8_t map_BPSK(complex in)
 	return in.real > 0 ? 1 : 0;
 }
 
-int rate_to_mbps(uint8_t rate)
-{
-	if (rate == 13)
-		return 6;
-	if (rate == 15)
-		return 9;
-	if (rate == 5)
-		return 12;
-	if (rate == 7)
-		return 18;
-	if (rate == 9)
-		return 24;
-	if (rate == 11)
-		return 36;
-	if (rate == 1)
-		return 48;
-	if (rate == 3)
-		return 54;
-
-	return 0;
-}
 
 int fft_complex(complex *in, complex *out, bool ifft = false)
 {
@@ -203,7 +197,165 @@ int init_scrambler()
 	return 0;
 }
 
+int depuncture(uint8_t *bits, int input_count, puncturing pun)
+{
+	if (pun == _1_2)
+		return input_count;
+	if (pun == _2_3)
+	{
+		int output_count = input_count * 4 / 3;
+		int block_count = input_count/3;
+		uint8_t *v = new uint8_t[input_count];
+		memcpy(v, bits, input_count);
 
+		for(int i=block_count-1; i>=0; i--)
+		{
+			bits[i*4+0] = v[i*3+0];
+			bits[i*4+1] = v[i*3+1];
+			bits[i*4+2] = v[i*3+2];
+			bits[i*4+3] = 2;
+		}
+
+		delete v;
+		return output_count;
+	}
+
+	if (pun == _3_4)
+	{
+		int block_count = input_count/4;
+		int output_count = block_count * 6;
+		uint8_t *v = new uint8_t[input_count];
+		memcpy(v, bits, input_count);
+
+		for(int i=block_count-1; i>=0; i--)
+		{
+			bits[i*6+0] = v[i*4+0];
+			bits[i*6+1] = v[i*4+1];
+			bits[i*6+2] = v[i*4+2];
+			bits[i*6+3] = 2;
+			bits[i*6+4] = 2;
+			bits[i*6+5] = v[i*4+3];
+		}
+
+		delete v;
+
+		return output_count;
+	}
+
+	return 0;
+}
+
+int puncture(uint8_t *bits, int input_count, puncturing pun)
+{
+	if (pun == _1_2)
+		return input_count;
+	if (pun == _2_3)
+	{
+		int block_count = input_count/4;
+		int output_count = block_count*3;
+
+		for(int i=0; i<block_count; i++)
+		{
+			bits[i*3+0] = bits[i*4+0];
+			bits[i*3+1] = bits[i*4+1];
+			bits[i*3+2] = bits[i*4+2];
+		}
+
+		return output_count;
+	}
+
+	if (pun == _3_4)
+	{
+		int block_count = input_count / 6;
+		int output_count = block_count * 4;
+
+		for(int i=0; i<block_count; i++)
+		{
+			bits[i*4+0] = bits[i*6+0];
+			bits[i*4+1] = bits[i*6+1];
+			bits[i*4+2] = bits[i*6+2];
+			bits[i*4+3] = bits[i*6+5];
+		}
+
+		return output_count;
+	}
+
+	return 0;
+}
+
+int ones[256];
+void init_ones()
+{
+	for(int n=0; n<256; n++)
+	{
+		ones[n] = 0;
+		for(int i = 0; i < 8; i++) {
+			if(n & (1 << i)) {
+				ones[n]++;
+			}
+		}
+	}
+}
+
+void convolutional_encoding(const uint8_t *in, uint8_t *out, int input_count)
+{
+	uint8_t state = 0;
+
+	for(int i = 0; i < input_count; i++) 
+	{
+		assert(in[i] == 0 || in[i] == 1);
+		state = ((state&0x3f) << 1) | in[i];			// shift left and input data on LSB
+		out[i * 2 + 0] = ones[state & 0x6d] & 1;		// 802.11 generator polynomial A: binary 1101101(0x6d, 0155)
+		out[i * 2 + 1] = ones[state & 0x4f] & 1;		// 802.11 generator polynomial B: binary 1001111(0x4f, 0117)
+	}
+}
+
+int test_convolutional_code()
+{
+	init_ones();
+
+	uint8_t data[] = {1, 0, 1, 0, 1, 1, 1, 1, 1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0};
+
+	char source[512] = {0};
+	uint8_t encoded[512] = {0};
+	uint8_t decoded[512] = {0};
+
+	printf("data:\n");
+	for(int i=0; i<sizeof(data); i++)
+		printf("%d ", data[i]);
+	printf("\n");
+
+	convolutional_encoding(data, encoded, sizeof(data));
+
+	printf("encoded:\n");
+	for(int i=0; i<sizeof(data); i++)
+		printf("%d%d ", encoded[i*2+0], encoded[i*2+1]);
+	printf("\n");
+
+
+	puncturing pun = _3_4;
+	int s1 = puncture(encoded, sizeof(data)*2, pun);
+// 	for(int i=0; i<14; i++)
+// 		encoded[i] ^= 1;
+// 
+// 	printf("corrupted:\n");
+// 	for(int i=0; i<sizeof(data); i++)
+// 		printf("%d%d ", encoded[i*2+0], encoded[i*2+1]);
+// 	printf("\n");
+	int s2 = depuncture(encoded, s1, pun);
+
+	assert(s2 == sizeof(data)*2);
+
+	viterbi_decoder dec;
+	dec.decode((uint8_t*)encoded, decoded, (sizeof(data)+15)/16*16, 9);
+
+	printf("decoded:\n");
+	for(int i=0; i<sizeof(data); i++)
+		printf("%d%s", decoded[i], decoded[i] == data[i] ? " " : "x");
+	printf("\n");
+
+	return 0;
+}
 
 
 int main()
@@ -213,7 +365,7 @@ int main()
 	init_LTS();
 	init_scrambler();
 	init_interleaver_pattern();
-	FILE * f = fopen("testcases\\wifi_6mbps_1frame.pcm", "rb");
+	FILE * f = fopen("testcases\\wifi_48mbps_1frame.pcm", "rb");
 	fseek(f, 0, SEEK_END);
 	int file_size = ftell(f);
 	fseek(f, 0, SEEK_SET);
@@ -355,7 +507,6 @@ int main()
 			peak_pos = autocorrection_pos[i];
 	fclose(f);
 
-// 	peak_pos += 64;
 	printf("long training sequence @ %d of preamble\n", peak_pos);
 	int symbol_start = preamble_start + peak_pos + 64;
 	printf("symbols start @ %d (%.1fus)\n", symbol_start, symbol_start/20.0f);
@@ -439,6 +590,7 @@ int main()
 
 	printf("\ndecoded:\n");
 	viterbi_decoder dec;
+	memset(&dec, 0, sizeof(dec));
 	dec.decode(signal_bits_deinterleaved, signal_decoded_bits, 48);
 	for(int i=0; i<24; i++)
 	{
@@ -448,9 +600,9 @@ int main()
 	}
 	printf("\n");
 
-	int rate = (signal_decoded_bits[0] << 3) | (signal_decoded_bits[1] << 2) | (signal_decoded_bits[2] << 1) | signal_decoded_bits[3];
+	int rate_code = (signal_decoded_bits[0] << 3) | (signal_decoded_bits[1] << 2) | (signal_decoded_bits[2] << 1) | signal_decoded_bits[3];
 
-	printf("rate:%dMbps\n", rate_to_mbps(rate));
+	printf("rate:%dMbps\n", rate_code_to_mbps(rate_code));
 	printf("reserved bytes:%d\n", signal_decoded_bits[4]);
 	int length = 0;
 	for(int i=0; i<12; i++)
@@ -469,7 +621,7 @@ int main()
 	}
 	printf("%s\n", tail_is_zero?"(OK)":"(ERROR)");
 
-	if (rate_to_mbps(rate) == 0
+	if (rate_code_to_mbps(rate_code) == 0
 		|| signal_decoded_bits[4] != 0
 		|| parity != signal_decoded_bits[17]
 		|| !tail_is_zero
@@ -479,14 +631,23 @@ int main()
 		return -1;
 	}
 
+	int rate = rate_code_to_mbps(rate_code);
+	modulation mod = rate2modulation(rate);
+	puncturing pun = rate2puncturing(rate);
+	printf("modulation:%s\n", modulation_name(mod));
+	printf("coding rate:%s\n", puncturing_name(pun));
 
-	int data_symbol_count = (length*8+ 16+6 + rate_to_mbps(rate)*4-1) / (rate_to_mbps(rate)*4);
+	int data_bits_per_symbol = mod*48 * pun/12;
+
+
+	int data_symbol_count = (length*8+ 16 + data_bits_per_symbol-1) / (data_bits_per_symbol);		// *8: 8bits per byte, +16: service field, +6: tailing
 	printf("%d data symbols\n", data_symbol_count);
 
-	int symbol_count = data_symbol_count + 1;		// 1 = signal
+	int symbol_count = data_symbol_count + 1;		// 1 = signal symbol
 
 	// fft all symbols
 	complex symbols[200][64];
+
 	for(int i=0; i<(sample_count-symbol_start)/80; i++)
 	{
 		fft_complex(s+symbol_start+i*80+16, symbols[i]);
@@ -562,16 +723,21 @@ int main()
 // 		printf("%d,%f\n", i, k_i);
 		
 		for(int j=0; j<symbol_count; j++)
-			phase_error[j][idx] = k_i * j;
+		{
+			phase_error[j][idx] = k_i * j + (b1[0]+b1[1]+b1[2]+b1[3])/4;
+			complex offset(cos(phase_error[j][idx]), -sin(phase_error[j][idx]));
+			symbols[j][idx] = symbols[j][idx] * offset;
+		}
 	}
 
-	FILE * csv = fopen("constellation.csv", "wb");
-	fprintf(f, "N,P,A\n");
-
-	uint8_t service_and_data_bits[48*512];
-	uint8_t service_and_data_deinterleaved_bits[48*512];
-	uint8_t service_and_data_decoded_bits[24*512];
+	// now the data symbols
+	uint8_t service_and_data_bits[4096*8];
+	uint8_t service_and_data_deinterleaved_bits[4096*8];
+	uint8_t service_and_data_decoded_bits[4096*8];
 	int pos = 0;
+
+	FILE * constellation = fopen("constellation.csv", "wb");
+	fprintf(f, "N,P,A\n");
 	for(int i=1; i<symbol_count; i++)
 	{
 		for(int j=-26; j<=26; j++)
@@ -580,30 +746,49 @@ int main()
 				continue;
 
 			int n = j>0?j:j+64;
-			if ((n==7||n==21||n==-7||n==-21||n==64-7||n==64-21))
-				continue;
+// 			if ((n==7||n==21||n==-7||n==-21||n==64-7||n==64-21))
+// 				continue;
 
-			complex offset2(cos(phase_error[i][n]), -sin(phase_error[i][n]));
-			complex v = symbols[i][n] * offset2;
+			complex v = symbols[i][n];
 
-			fprintf(csv, "%d,%f,%f,%f\n", j, v.real, v.image, v.argument());
-			service_and_data_bits[pos++] = map_BPSK(v);
+			fprintf(constellation, "%d,%f,%f,%f\n", i, v.real, v.image, v.argument());
 		}
-
-		printf("");
 	}
+	fclose(constellation);
 
-	fclose(csv);
+	mapper demapper = modulation2demapper(mod);
+	int * pattern = modulation2inerleaver_pattern(mod);
+	int bits_per_symbol = 48*mod;
+	int data_bit_per_symbol = bits_per_symbol * pun / 12;
 
-	for(int i=0; i<48*data_symbol_count; i++)
+	for(int i=0; i<data_symbol_count; i++)
 	{
-		int symbol = i/48;
-		service_and_data_deinterleaved_bits[i] = service_and_data_bits[i/48*48 + interleave_pattern[0][i%48]];
+		// map bits
+		uint8_t *p = service_and_data_bits + bits_per_symbol*i;
+		demapper(symbols[i+1], p);
+
+		// deinterleave
+		uint8_t *p2 = service_and_data_deinterleaved_bits+ bits_per_symbol*i;
+		for(int j=0; j<bits_per_symbol; j++)
+			p2[j] = p[pattern[j]];
 	}
 
-	dec.decode(service_and_data_deinterleaved_bits, service_and_data_decoded_bits, 48*data_symbol_count);
+// 	for(int i=0; i<bits_per_symbol*data_symbol_count; i++)
+// 	{
+// 		printf("%d", service_and_data_deinterleaved_bits[i]);
+// 	}
+
+
+	memset(&dec, 0, sizeof(dec));
+	int bits_count = depuncture(service_and_data_deinterleaved_bits, bits_per_symbol*data_symbol_count, pun);
+	int ntraceback = 5;
+	if (pun == _2_3)
+		ntraceback = 9;
+	if (pun == _3_4)
+		ntraceback = 10;
+	dec.decode(service_and_data_deinterleaved_bits, service_and_data_decoded_bits, bits_count, ntraceback);
 	uint8_t out_bytes[4096];
-	descramble(service_and_data_decoded_bits, out_bytes, 24*data_symbol_count);
+	descramble(service_and_data_decoded_bits, out_bytes, data_bit_per_symbol*data_symbol_count);
 
 	uint32_t crc = crc32_80211(out_bytes+2, length-4);
 

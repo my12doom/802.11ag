@@ -33,7 +33,7 @@ class viterbi_decoder
 {
 public:
 
-	int decode(uint8_t *in, uint8_t *output, int input_count);
+	int decode(uint8_t *in, uint8_t *output, int input_count, int ntrace = 5);
 
 private:
 
