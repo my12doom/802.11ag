@@ -14,10 +14,33 @@
 using namespace gr::ieee802_11;
 
 #define countof(x) (sizeof(x)/sizeof(x[0]))
-HRESULT save_bitmap(RGBQUAD *data, const wchar_t *filename, int width, int height);
 
-
+const int CORDIC_TBL_COUNT = 100000;
+const int MAX_SYMBOLS_PER_SAMPLE = 200;
+complex cordic_tbl[CORDIC_TBL_COUNT];
 int interleave_pattern[4][288];	// [BPSK, QPSK, 16QAM, 64QAM] [max: 6*48bits]
+
+int init_cordic()
+{
+	for(int i=0; i<CORDIC_TBL_COUNT; i++)
+	{
+		float phase = i*2*PI/CORDIC_TBL_COUNT;
+		cordic_tbl[i] = complex(cos(phase), sin(phase));
+	}
+	return 0;
+}
+
+complex & cordic(float phase)
+{
+	static const float pi2 = acos(-1.0)*2;
+	while(phase<0)
+		phase += pi2;
+	while(phase>pi2)
+		phase -= pi2;
+	int idx = int(phase/pi2 * (CORDIC_TBL_COUNT-1));
+	assert(idx>=0 && idx <CORDIC_TBL_COUNT);
+	return cordic_tbl[idx];
+}
 
 int init_interleaver_pattern()
 {
@@ -358,34 +381,13 @@ int test_convolutional_code()
 }
 
 
-int main()
+int test(complex * s, int sample_count, uint8_t *out_data, bool *valid_data)
 {
 	int l = GetTickCount();
+	*valid_data = false;
 
-	init_LTS();
-	init_scrambler();
-	init_interleaver_pattern();
-	FILE * f = fopen("testcases\\wifi_48mbps_1frame.pcm", "rb");
-	fseek(f, 0, SEEK_END);
-	int file_size = ftell(f);
-	fseek(f, 0, SEEK_SET);
-
-	int sample_count = file_size/4;
-	short * data = new short[file_size/2];
-	fread(data, 1, file_size, f);
-	fclose(f);
-
-	complex *s = new complex[sample_count];
-	for(int i=0; i<sample_count; i++)
-	{
-		float n = (rand()&0xff-128)*13.0f/255;
-		n=0;
-		s[i].real = data[i*2+1]/256 + n;		// revert IQ
-		s[i].image = data[i*2+0]/256 + n;
-	}
-
-	f =fopen("ShortTraining.csv", "wb");
-	fprintf(f, "N,P,A\n");
+// 	f =fopen("ShortTraining.csv", "wb");
+// 	fprintf(f, "N,P,A\n");
 
 	int Nwindow = 48;
 
@@ -399,21 +401,28 @@ int main()
 	for(int n=0; n<sample_count-64; n++)
 	{
 		complex a;
-		complex p;
+		float p = 0;
 		complex _f;
 		for(int k=0; k<Nwindow; k++)
-			a = a + s[n+k] * s[n+k+16].conjugate();
+			a += s[n+k] * s[n+k+16].conjugate();
 		for(int k=0; k<Nwindow; k++)
-			p = p + s[n+k] * s[n+k].conjugate();
+			p += s[n+k].sq_magnitude(); //s[n+k] * s[n+k].conjugate();
 		for(int k=0; k<16; k++)
-			_f = _f + s[n+k+Nwindow+16] * s[n+k+16+Nwindow+16].conjugate();	// note:latency ~= Nwindow+16
+			_f += s[n+k+Nwindow+16] * s[n+k+16+Nwindow+16].conjugate();	// note:latency ~= Nwindow+16
 
-		float autocorrelation = a.magnitude() / p.magnitude();
+		if (p < 0.01f)
+		{
+			n += Nwindow;
+			preamble_found = false;
+			continue;
+		}
+
+		float autocorrelation = a.magnitude() / p;
 		float df = _f.argument()/16.0f;
 		if (autocorrelation>1)
 			autocorrelation = 1;
 
-		fprintf(f, "%f,%f,%f\n", float(n), autocorrelation*1000, s[n+Nwindow+16].magnitude());
+// 		fprintf(f, "%f,%f,%f\n", float(n), autocorrelation*1000, s[n+Nwindow+16].magnitude());
 
 		if (autocorrelation > autocorrelation_throthold && !preamble_found)
 		{
@@ -451,22 +460,22 @@ int main()
 	else
 	{
 		printf("preamble not found.\n");
-		return -1;
+		return sample_count;
 	}
-	fclose(f);
+// 	fclose(f);
 
-	// apply coarse frequency offset, write to debug file ,and swap pointer
-	for(int n=0; n<sample_count; n++)
+	// apply coarse frequency offset for preambles only
+	for(int n=preamble_start; n<min(preamble_start+MAX_SYMBOLS_PER_SAMPLE*80, sample_count); n++)
 	{	
 		// s2[n] = s[n] * e^(i*n*df)
-		complex offset(cos(n*df_avg), sin(n*df_avg));
-		s[n] = s[n] * offset;
+		//complex offset(cos(n*df_avg), sin(n*df_avg));
+		s[n] *= cordic(n*df_avg);//offset;
 	}
 
 	// OFDM symbol alignment
 	// use long training sequence to find first symbol
-	f =fopen("alignment.csv", "wb");
-	fprintf(f, "N,P,A\n");
+// 	f =fopen("alignment.csv", "wb");
+// 	fprintf(f, "N,P,A\n");
 	float autocorrection_value[3] = {0};
 	int autocorrection_pos[3] = {0};
 	for(int n=80; n<320+50; n++)			// 160: number of sample of short training sequence
@@ -476,12 +485,12 @@ int main()
 		float p = 0;
 		for(int k=0; k<64; k++)
 		{
-			a = a + s[preamble_start+n+k] * LT_time_space[k].conjugate();
-			p += (s[preamble_start+n+k] * s[preamble_start+n+k].conjugate()).real;
+			a += s[preamble_start+n+k] * LT_time_space[k].conjugate();
+			p += s[preamble_start+n+k].sq_magnitude();//(s[preamble_start+n+k] * s[preamble_start+n+k].conjugate()).real;
 		}
 
 		float autocorelation = a.magnitude()/p;
-		fprintf(f, "%d,%f\n", n, autocorelation);
+// 		fprintf(f, "%d,%f\n", n, autocorelation);
 
 		for(int i=0; i<3; i++)
 		{
@@ -505,7 +514,7 @@ int main()
 	for(int i=0; i<3; i++)
 		if (autocorrection_pos[i] > peak_pos)
 			peak_pos = autocorrection_pos[i];
-	fclose(f);
+// 	fclose(f);
 
 	printf("long training sequence @ %d of preamble\n", peak_pos);
 	int symbol_start = preamble_start + peak_pos + 64;
@@ -513,25 +522,14 @@ int main()
 
 	// fine frequency offset
 	complex _df;
-	float sigma = 0;
 	for(int i=0; i<64; i++)
 	{
-		float v_df = 0.005*PI/180;
-		complex offset1(cos((i)*v_df), sin((i)*v_df));
-		complex offset2(cos((i+64)*v_df), sin((i+64)*v_df));
 		complex _f = s[symbol_start-64+i] * s[symbol_start-128+i].conjugate();
-		_df = _df + _f;
+		_df += _f;
 
-		float _f2 = phase_sub(s[symbol_start-64+i].argument(), s[symbol_start-128+i].argument());
-// 		printf("%f\t%f\n", _f2*180/PI, _f.argument()*180/PI);
-
-		sigma += _f2;
 	}
 
 	float df = _df.argument()/64;
-// 	sigma /= 64;
-// 
-// 	df = sigma * PI / 180;
 
 	printf("fine frequency offset:%f degree / sample (%f Mhz)\n", df * 180 / PI, 20 / (2 * PI / df) );
 
@@ -555,7 +553,7 @@ int main()
 
 		h[n] = complex::from_phase_magnitude(phase_diffs, amplitude_normalizer);
 
-		assert(abs(phase_diffs- (LT_frequency_space[n]*lt_rx_fft[n].conjugate()).argument()) < 0.05);
+// 		assert(abs(phase_diffs- (LT_frequency_space[n]*lt_rx_fft[n].conjugate()).argument()) < 0.05);
 		complex normalized = lt_rx_fft[n]*h[n];
 
 // 		printf("%d,%.2f,%.4f\n", i, normalized.argument(), normalized.magnitude());
@@ -566,9 +564,9 @@ int main()
 	// if this symbol fails to decode, we drop the whole frame
 	complex signal_fft[64];
 	fft_complex(&s[symbol_start+16], signal_fft);
-	uint8_t signal_bits[48] = {0};
-	uint8_t signal_bits_deinterleaved[64] = {0};
-	uint8_t signal_decoded_bits[48];
+	ALIGN uint8_t signal_bits[64] = {0};
+	ALIGN uint8_t signal_bits_deinterleaved[64] = {0};
+	ALIGN uint8_t signal_decoded_bits[64];
 	int signal_pos = 0;
 	printf("signal bits:\n");
 	for(int i=-26; i<=26; i++)
@@ -588,10 +586,10 @@ int main()
 	for(int i=0; i<48; i++)
 		signal_bits_deinterleaved[i] = signal_bits[interleave_pattern[0][i]];
 
-	printf("\ndecoded:\n");
-	viterbi_decoder dec;
-	memset(&dec, 0, sizeof(dec));
-	dec.decode(signal_bits_deinterleaved, signal_decoded_bits, 48);
+	printf("\ndecoded:%08x\n", signal_bits_deinterleaved);
+	viterbi_decoder *dec = new viterbi_decoder;
+	dec->decode(signal_bits_deinterleaved, signal_decoded_bits, 48);
+	delete dec;
 	for(int i=0; i<24; i++)
 	{
 		if (i % 8 == 0 && i > 0)
@@ -625,10 +623,11 @@ int main()
 		|| signal_decoded_bits[4] != 0
 		|| parity != signal_decoded_bits[17]
 		|| !tail_is_zero
+		|| length > 1024
 		)
 	{
 		printf("invalid signal field\n");
-		return -1;
+		return symbol_start+80;
 	}
 
 	int rate = rate_code_to_mbps(rate_code);
@@ -639,26 +638,32 @@ int main()
 
 	int data_bits_per_symbol = mod*48 * pun/12;
 
-
-	int data_symbol_count = (length*8+ 16 + data_bits_per_symbol-1) / (data_bits_per_symbol);		// *8: 8bits per byte, +16: service field, +6: tailing
+	int data_symbol_count = (length*8+ 16+6 + data_bits_per_symbol-1) / (data_bits_per_symbol);		// *8: 8bits per byte, +16: service field, +6: tailing
 	printf("%d data symbols\n", data_symbol_count);
 
 	int symbol_count = data_symbol_count + 1;		// 1 = signal symbol
 
+	if (sample_count - symbol_start < symbol_count * 80)
+	{
+		printf("not enough data sample");
+		return sample_count;
+	}
+
+
 	// fft all symbols
 	complex symbols[200][64];
 
-	for(int i=0; i<(sample_count-symbol_start)/80; i++)
+	for(int i=0; i<symbol_count; i++)
 	{
 		fft_complex(s+symbol_start+i*80+16, symbols[i]);
 
 		// equalizing
 		float phase_offset_per_symbol = -df * 80;
 		float phase_offset = (i+1)*phase_offset_per_symbol;
-		complex offset(cos(phase_offset), sin(phase_offset));
-
+// 		complex offset(cos(phase_offset), sin(phase_offset));
+// 		complex offset2 = cordic(phase_offset);
 		for(int j=0; j<64; j++)
-			symbols[i][j] = symbols[i][j] * h[j] * offset;
+			symbols[i][j] = symbols[i][j] * h[j] * cordic(phase_offset);//offset;
 	}
 
 
@@ -666,7 +671,7 @@ int main()
 	// use pilot tones to compensate for it
 	float pilot_phase[4][200];
 	float pilot_phase_error[4][200];
-	for(int i=0; i<(sample_count-symbol_start)/80; i++)
+	for(int i=0; i<symbol_count; i++)
 	{
 		pilot_phase[0][i] = symbols[i][-21+64].argument();
 		pilot_phase[1][i] = symbols[i][-7+64].argument();
@@ -724,37 +729,37 @@ int main()
 		
 		for(int j=0; j<symbol_count; j++)
 		{
-			phase_error[j][idx] = k_i * j + (b1[0]+b1[1]+b1[2]+b1[3])/4;
-			complex offset(cos(phase_error[j][idx]), -sin(phase_error[j][idx]));
-			symbols[j][idx] = symbols[j][idx] * offset;
+			float phase_error = -(k_i * j + (b1[0]+b1[1]+b1[2]+b1[3])/4);
+// 			complex offset(cos(phase_error), sin(phase_error));
+			symbols[j][idx] = symbols[j][idx] * cordic(phase_error);//offset;
 		}
 	}
 
 	// now the data symbols
-	uint8_t service_and_data_bits[4096*8];
-	uint8_t service_and_data_deinterleaved_bits[4096*8];
-	uint8_t service_and_data_decoded_bits[4096*8];
+	ALIGN uint8_t service_and_data_bits[8192*8] = {0};
+	ALIGN uint8_t service_and_data_deinterleaved_bits[8192*8] = {0};
+	ALIGN uint8_t service_and_data_decoded_bits[8192*8];
 	int pos = 0;
 
-	FILE * constellation = fopen("constellation.csv", "wb");
-	fprintf(f, "N,P,A\n");
-	for(int i=1; i<symbol_count; i++)
-	{
-		for(int j=-26; j<=26; j++)
-		{
-			if (j == 0)
-				continue;
-
-			int n = j>0?j:j+64;
-// 			if ((n==7||n==21||n==-7||n==-21||n==64-7||n==64-21))
+// 	FILE * constellation = fopen("constellation.csv", "wb");
+// 	fprintf(f, "N,P,A\n");
+// 	for(int i=1; i<symbol_count; i++)
+// 	{
+// 		for(int j=-26; j<=26; j++)
+// 		{
+// 			if (j == 0)
 // 				continue;
-
-			complex v = symbols[i][n];
-
-			fprintf(constellation, "%d,%f,%f,%f\n", i, v.real, v.image, v.argument());
-		}
-	}
-	fclose(constellation);
+// 
+// 			int n = j>0?j:j+64;
+// // 			if ((n==7||n==21||n==-7||n==-21||n==64-7||n==64-21))
+// // 				continue;
+// 
+// 			complex v = symbols[i][n];
+// 
+// 			//fprintf(constellation, "%d,%f,%f,%f\n", i, v.real, v.image, v.argument());
+// 		}
+// 	}
+// 	fclose(constellation);
 
 	mapper demapper = modulation2demapper(mod);
 	int * pattern = modulation2inerleaver_pattern(mod);
@@ -779,26 +784,115 @@ int main()
 // 	}
 
 
-	memset(&dec, 0, sizeof(dec));
+// 	memset(&dec, 0, sizeof(dec));
+	printf("sample_count = %d\n", sample_count);
+	fflush(stdout);
 	int bits_count = depuncture(service_and_data_deinterleaved_bits, bits_per_symbol*data_symbol_count, pun);
+	printf("bits_count = %d\n", bits_count);
+	fflush(stdout);
 	int ntraceback = 5;
 	if (pun == _2_3)
 		ntraceback = 9;
 	if (pun == _3_4)
 		ntraceback = 10;
-	dec.decode(service_and_data_deinterleaved_bits, service_and_data_decoded_bits, bits_count, ntraceback);
-	uint8_t out_bytes[4096];
+	printf("l:%d\n", __LINE__);
+	fflush(stdout);
+	viterbi_decoder dec2;
+	dec2.decode(service_and_data_deinterleaved_bits, service_and_data_decoded_bits, bits_count+16, ntraceback);
+	uint8_t out_bytes[8192];
+	printf("l:%d\n", __LINE__);
+	fflush(stdout);
 	descramble(service_and_data_decoded_bits, out_bytes, data_bit_per_symbol*data_symbol_count);
+	printf("l:%d\n", __LINE__);
+	fflush(stdout);
 
 	uint32_t crc = crc32_80211(out_bytes+2, length-4);
-
+	uint8_t *p = out_bytes+ 2+length-4;
+	uint32_t crc_received = (p[3] << 24) | (p[2] << 16) | (p[1] << 8) | p[0];
 	printf("FCS(calculated)=0x%08x\n", crc);
-	printf("FCS(received)=0x%02x%02x%02x%02x\n", out_bytes[2+length-4+3], out_bytes[2+length-4+2], out_bytes[2+length-4+1], out_bytes[2+length-4+0]);
+	printf("FCS(received)=0x%08x\n", crc_received);
 
-	f = fopen("data.bin", "wb");
-	fwrite(out_bytes+2, 1, length, f);
-	fclose(f);
+// 	f = fopen("data.bin", "wb");
+// 	fwrite(out_bytes+2, 1, length, f);
+// 	fclose(f);
+
+	memcpy(out_data, out_bytes+2, length);
+	*valid_data = crc == crc_received;
 
 	printf("%dms\n", GetTickCount()-l);
+	return symbol_start + symbol_count * 80;
+}
+
+
+int main()
+{
+	init_LTS();
+	init_scrambler();
+	init_interleaver_pattern();
+	init_cordic();
+
+	for(int i=0; i<100; i++)
+	{
+		viterbi_decoder *p = new viterbi_decoder;
+		printf("%08x\n", p->d_metric0);
+	}
+
+
+	fprintf(stderr, "reading....");
+	FILE * f = fopen("testcases\\video.pcm", "rb");
+	if (!f)
+	{
+		printf("failed opening file\n");
+		return 0;
+	}
+	printf("go\n");
+	fseek(f, 0, SEEK_END);
+	int file_size = ftell(f);
+	fseek(f, 0, SEEK_SET);
+	printf("go2\n");
+
+	int sample_count = file_size/4;
+	short * data = new short[file_size/2];
+	printf("go3:%08x\n", data);
+	fread(data, 1, file_size, f);
+	printf("go4:%08x\n", data);
+	fclose(f);
+	printf("go5:%08x\n", data);
+
+	complex *s = new complex[sample_count];
+	printf("%08x\n", s);
+	for(int i=0; i<sample_count; i++)
+	{
+		// 		float n = (rand()&0xff-128)*13.0f/255;
+		int n=0;
+		s[i].real = data[i*2+1]/256 + n;		// revert IQ
+		s[i].image = data[i*2+0]/256 + n;
+	}
+	delete data;
+
+	fprintf(stderr, "done %d samples\n", sample_count);
+	int l = GetTickCount();
+
+	int pos = 0;
+	int kk = 0;
+	uint8_t data_out[8192];
+	bool valid = false;
+	int valid_count = 0;
+	while(sample_count > pos)
+	{
+		int c = test(s+pos, sample_count-pos, data_out, &valid);
+		pos += c;
+		if (valid)
+			valid_count ++ ;
+
+		fprintf(stderr, "\r%d/%d ", valid_count, kk++);
+	}
+
+		
+
+	l = GetTickCount() - l;
+
+	printf("total:%d\n", l);
+
 	return 0;
 }

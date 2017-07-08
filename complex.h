@@ -83,6 +83,14 @@ public:
 		return o;
 	}
 
+	complex& operator +=(const complex &b)
+	{
+		real += b.real;
+		image += b.image;
+
+		return *this;
+	}
+
 	complex operator /(const float &b)
 	{
 		complex o(real, image);

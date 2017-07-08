@@ -56,6 +56,8 @@
  * would spill over into memory.
  */
 
+#ifndef IEEE80211_MSSE2
+
 #define BUTTERFLY(i,sym) {											\
 		int m0,m1,m2,m3;											\
 		/* ACS for 0 branch */										\
@@ -459,3 +461,5 @@ viterbi_decoder::viterbi_chunks_init_generic() {
 		}
 	}
 }
+
+#endif
