@@ -74,9 +74,9 @@ int QAM16_symbols_to_bits(complex *symbols, uint8_t *bits)
 		int idx = i>0?i:i+64;
 
 		int b0 = symbols[idx].real > 0 ? 1 : 0;
-		int b1 = abs(symbols[idx].real) < 0.666f ? 1 : 0;
+		int b1 = fabs(symbols[idx].real) < 0.666f ? 1 : 0;
 		int b2 = symbols[idx].image < 0 ? 1 : 0;			// WTF? image reversed?
-		int b3 = abs(symbols[idx].image) < 0.666f ? 1 : 0;
+		int b3 = fabs(symbols[idx].image) < 0.666f ? 1 : 0;
 
 		bits[j++] = b0;
 		bits[j++] = b1;
@@ -98,12 +98,12 @@ int QAM64_symbols_to_bits(complex *symbols, uint8_t *bits)
 		int idx = i>0?i:i+64;
 
 		int b0 = symbols[idx].real > 0 ? 1 : 0;
-		int b1 = abs(symbols[idx].real) < 0.5715f ? 1 : 0;
-		int b2 = (abs(symbols[idx].real) > 0.2857f && abs(symbols[idx].real) < 0.8571) ? 1 : 0;
+		int b1 = fabs(symbols[idx].real) < 0.5715f ? 1 : 0;
+		int b2 = (fabs(symbols[idx].real) > 0.2857f && fabs(symbols[idx].real) < 0.8571) ? 1 : 0;
 
 		int b3 = symbols[idx].image < 0 ? 1 : 0;	// WTF? image reversed?
-		int b4 = abs(symbols[idx].image) < 0.5715f ? 1 : 0;
-		int b5 = (abs(symbols[idx].image) > 0.2857f && abs(symbols[idx].image) < 0.8571) ? 1 : 0;
+		int b4 = fabs(symbols[idx].image) < 0.5715f ? 1 : 0;
+		int b5 = (fabs(symbols[idx].image) > 0.2857f && fabs(symbols[idx].image) < 0.8571) ? 1 : 0;
 
 		bits[j++] = b0;
 		bits[j++] = b1;
