@@ -119,17 +119,178 @@ int QAM64_symbols_to_bits(complex *symbols, uint8_t *bits)
 
 int bits_to_BPSK_symbols(complex *symbols, uint8_t *bits)
 {
-	return 0;
+	int j = 0;
+	for(int i=-26;i<=26;i++)
+	{
+		if (i==0 || i == -7 || i == -21 || i == 7 || i == 21)
+			continue;
+		int idx = i>0?i:i+64;
+		symbols[idx].real = bits[j++] ? 1.0f : -1.0f;
+	}
+
+	assert(j == 48);
+
+	return j;
 }
+
 int bits_to_QPSK_symbols(complex *symbols, uint8_t *bits)
 {
-	return 0;
+	int j = 0;
+	static complex tbl[4] =
+	{
+		complex(-1.0f, 1.0f),			// WTF? image reversed?
+		complex(-1.0f, -1.0f),
+		complex(1.0f, 1.0f),
+		complex(1.0f, -1.0f),
+	};
+	for(int i=-26;i<=26;i++)
+	{
+		if (i==0 || i == -7 || i == -21 || i == 7 || i == 21)
+			continue;
+		int idx = i>0?i:i+64;
+		int symbol = (bits[j] << 1) | bits[j+1];
+		j += 2;
+		symbols[idx] = tbl[symbol];
+	}
+
+	assert(j == 96);
+
+	return j;
 }
+
 int bits_to_QAM16_symbols(complex *symbols, uint8_t *bits)
 {
-	return 0;
+	int j = 0;
+	static complex tbl[16] =
+	{
+		complex(-1.0f, 1.0f),			// WTF? image reversed?
+		complex(-1.0f, 0.3333f),
+		complex(-1.0f, -1.0f),
+		complex(-1.0f, -0.3333f),
+
+		complex(-0.3333f, 1.0f),			// WTF? image reversed?
+		complex(-0.3333f, 0.3333f),
+		complex(-0.3333f, -1.0f),
+		complex(-0.3333f, -0.3333f),
+
+		complex(1.0f, 1.0f),			// WTF? image reversed?
+		complex(1.0f, 0.3333f),
+		complex(1.0f, -1.0f),
+		complex(1.0f, -0.3333f),
+
+		complex(0.3333f, 1.0f),			// WTF? image reversed?
+		complex(0.3333f, 0.3333f),
+		complex(0.3333f, -1.0f),
+		complex(0.3333f, -0.3333f),
+	};
+
+	for(int i=-26;i<=26;i++)
+	{
+		if (i==0 || i == -7 || i == -21 || i == 7 || i == 21)
+			continue;
+		int idx = i>0?i:i+64;
+		int symbol = (bits[j] << 3) | (bits[j+1] << 2) | (bits[j+2] << 1) | (bits[j+3] << 0);
+		j += 4;
+		symbols[idx] = tbl[symbol];
+	}
+
+	assert(j == 192);
+
+	return j;
 }
+
 int bits_to_QAM64_symbols(complex *symbols, uint8_t *bits)
 {
-	return 0;
+	int j = 0;
+	static complex tbl[64] =
+	{
+		complex(-1.0f, 1.0f),
+		complex(-1.0f, 0.7143f),
+		complex(-1.0f, 0.1429f),
+		complex(-1.0f, 0.4286f),
+		complex(-1.0f, -1.0f),
+		complex(-1.0f, -0.7143f),
+		complex(-1.0f, -0.1429f),
+		complex(-1.0f, -0.4286f),
+
+		complex(-0.7143f, 1.0f),
+		complex(-0.7143f, 0.7143f),
+		complex(-0.7143f, 0.1429f),
+		complex(-0.7143f, 0.4286f),
+		complex(-0.7143f, -1.0f),
+		complex(-0.7143f, -0.7143f),
+		complex(-0.7143f, -0.1429f),
+		complex(-0.7143f, -0.4286f),
+
+		complex(-0.1429f, 1.0f),
+		complex(-0.1429f, 0.7143f),
+		complex(-0.1429f, 0.1429f),
+		complex(-0.1429f, 0.4286f),
+		complex(-0.1429f, -1.0f),
+		complex(-0.1429f, -0.7143f),
+		complex(-0.1429f, -0.1429f),
+		complex(-0.1429f, -0.4286f),
+
+		complex(-0.4286f, 1.0f),
+		complex(-0.4286f, 0.7143f),
+		complex(-0.4286f, 0.1429f),
+		complex(-0.4286f, 0.4286f),
+		complex(-0.4286f, -1.0f),
+		complex(-0.4286f, -0.7143f),
+		complex(-0.4286f, -0.1429f),
+		complex(-0.4286f, -0.4286f),
+
+		//
+		complex(+1.0f, 1.0f),
+		complex(+1.0f, 0.7143f),
+		complex(+1.0f, 0.1429f),
+		complex(+1.0f, 0.4286f),
+		complex(+1.0f, -1.0f),
+		complex(+1.0f, -0.7143f),
+		complex(+1.0f, -0.1429f),
+		complex(+1.0f, -0.4286f),
+
+		complex(+0.7143f, 1.0f),
+		complex(+0.7143f, 0.7143f),
+		complex(+0.7143f, 0.1429f),
+		complex(+0.7143f, 0.4286f),
+		complex(+0.7143f, -1.0f),
+		complex(+0.7143f, -0.7143f),
+		complex(+0.7143f, -0.1429f),
+		complex(+0.7143f, -0.4286f),
+
+		complex(+0.1429f, 1.0f),
+		complex(+0.1429f, 0.7143f),
+		complex(+0.1429f, 0.1429f),
+		complex(+0.1429f, 0.4286f),
+		complex(+0.1429f, -1.0f),
+		complex(+0.1429f, -0.7143f),
+		complex(+0.1429f, -0.1429f),
+		complex(+0.1429f, -0.4286f),
+
+		complex(+0.4286f, 1.0f),
+		complex(+0.4286f, 0.7143f),
+		complex(+0.4286f, 0.1429f),
+		complex(+0.4286f, 0.4286f),
+		complex(+0.4286f, -1.0f),
+		complex(+0.4286f, -0.7143f),
+		complex(+0.4286f, -0.1429f),
+		complex(+0.4286f, -0.4286f),
+
+	};
+
+	for(int i=-26;i<=26;i++)
+	{
+		if (i==0 || i == -7 || i == -21 || i == 7 || i == 21)
+			continue;
+		int idx = i>0?i:i+64;
+		int symbol = (bits[j] << 5) | (bits[j+1] << 4) | (bits[j+2] << 3) | 
+				(bits[j+3] << 2)| (bits[j+4] << 1) | (bits[j+5] << 0);
+		j += 6;
+		symbols[idx] = tbl[symbol];
+	}
+
+	assert(j == 288);
+
+	return j;
 }

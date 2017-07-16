@@ -109,3 +109,26 @@ static int rate_code_to_mbps(uint8_t code)
 
 	return 0;
 }
+
+
+static int mbps_to_rate_code(int mbps)
+{
+	if (mbps == 6)
+		return 13;
+	if (mbps == 9)
+		return 15;
+	if (mbps == 12)
+		return 5;
+	if (mbps == 18)
+		return 7;
+	if (mbps == 24)
+		return 9;
+	if (mbps == 36)
+		return 11;
+	if (mbps == 48)
+		return 1;
+	if (mbps == 54)
+		return 3;
+
+	return 0;
+}

@@ -140,10 +140,43 @@ int fft_complex(complex *in, complex *out, bool ifft = false)
 	return 0;
 }
 
+
+int fft_complex_N(complex *in, complex *out, int N, bool ifft = false)
+{
+	real_t *I = new real_t[N];
+	real_t *Q = new real_t[N];
+
+	real_t *IO = new real_t[N];
+	real_t *QO = new real_t[N];
+
+	for(int i=0; i<N; i++)
+	{
+		I[i] = in[i].real;
+		Q[i] = in[i].image;
+	}
+
+	fft_real_t(N, ifft, I, Q, IO, QO);
+
+	for(int i=0; i<N; i++)
+	{
+		out[i].real = IO[i];
+		out[i].image = QO[i];
+	}
+
+	delete [] I;
+	delete [] Q;
+	delete [] IO;
+	delete [] QO;
+
+	return 0;
+}
+
 complex LT_time_space[128];			// LT = long training, 2 repetition.
 complex LT_frequency_space[64];		// one OFDM symbol only
+complex ST_time_space[160];			// LT = long training, 2 repetition.
+complex ST_frequency_space[64];		// one OFDM symbol only
 
-int init_LTS()
+int init_training_sequence()
 {
 	// long training sequence is a predefined OFDM symbol
 	// generate it by iFFT.
@@ -168,6 +201,64 @@ int init_LTS()
 	{
 		int16_t i16 = LT_time_space[i].real;
 		int16_t q16 = LT_time_space[i].image;
+		fwrite(&i16, 1, 2, f);
+		fwrite(&q16, 1, 2, f);
+	}
+
+	fclose(f);
+
+
+	// short training sequence
+	int scale = 32767*sqrt(13.0/6.0);
+
+	ST_frequency_space[4].real = -1 * scale;
+	ST_frequency_space[4].image = -1 * -scale;
+
+	ST_frequency_space[8].real = -1 * scale;
+	ST_frequency_space[8].image = -1 * -scale;
+
+	ST_frequency_space[12].real = 1 * scale;
+	ST_frequency_space[12].image = 1 * -scale;
+
+	ST_frequency_space[16].real = 1 * scale;
+	ST_frequency_space[16].image = 1 * -scale;
+
+	ST_frequency_space[20].real = 1 * scale;
+	ST_frequency_space[20].image = 1 * -scale;
+
+	ST_frequency_space[24].real = 1 * scale;
+	ST_frequency_space[24].image = 1 * -scale;
+
+	ST_frequency_space[64-4].real = 1 * scale;
+	ST_frequency_space[64-4].image = 1 * -scale;
+
+	ST_frequency_space[64-8].real = -1 * scale;
+	ST_frequency_space[64-8].image = -1 * -scale;
+
+	ST_frequency_space[64-12].real = -1 * scale;
+	ST_frequency_space[64-12].image = -1 * -scale;
+
+	ST_frequency_space[64-16].real = 1 * scale;
+	ST_frequency_space[64-16].image = 1 * -scale;
+
+	ST_frequency_space[64-20].real = -1 * scale;
+	ST_frequency_space[64-20].image = -1 * -scale;
+
+	ST_frequency_space[64-24].real = 1 * scale;
+	ST_frequency_space[64-24].image = 1 * -scale;
+
+
+	fft_complex(ST_frequency_space, ST_time_space, true);
+	for(int i=0; i<16; i++)
+		ST_time_space[i+64] = ST_time_space[i];
+	for(int i=0; i<80; i++)
+		ST_time_space[i+80] = ST_time_space[i];
+
+	f = fopen("ST.pcm", "wb");
+	for(int i=0; i<160; i++)
+	{
+		int16_t i16 = ST_time_space[i].real;
+		int16_t q16 = ST_time_space[i].image;
 		fwrite(&i16, 1, 2, f);
 		fwrite(&q16, 1, 2, f);
 	}
@@ -381,13 +472,15 @@ int test_convolutional_code()
 }
 
 
-int test(complex * s, int sample_count, uint8_t *out_data, bool *valid_data)
+int rx(complex * s, int sample_count, uint8_t *out_data, int *valid_data_len)
 {
 	int l = GetTickCount();
-	*valid_data = false;
+	*valid_data_len = 0;
 
-// 	f =fopen("ShortTraining.csv", "wb");
-// 	fprintf(f, "N,P,A\n");
+	FILE * f;
+
+	f =fopen("ShortTraining.csv", "wb");
+	fprintf(f, "N,P,A\n");
 
 	int Nwindow = 48;
 
@@ -410,9 +503,8 @@ int test(complex * s, int sample_count, uint8_t *out_data, bool *valid_data)
 		for(int k=0; k<16; k++)
 			_f += s[n+k+Nwindow+16] * s[n+k+16+Nwindow+16].conjugate();	// note:latency ~= Nwindow+16
 
-		if (p < 0.01f)
+		if (p < Nwindow*4)
 		{
-			n += Nwindow;
 			preamble_found = false;
 			continue;
 		}
@@ -422,7 +514,7 @@ int test(complex * s, int sample_count, uint8_t *out_data, bool *valid_data)
 		if (autocorrelation>1)
 			autocorrelation = 1;
 
-// 		fprintf(f, "%f,%f,%f\n", float(n), autocorrelation*1000, s[n+Nwindow+16].magnitude());
+		fprintf(f, "%f,%f,%f\n", float(n), autocorrelation*1000, s[n+Nwindow+16].magnitude());
 
 		if (autocorrelation > autocorrelation_throthold && !preamble_found)
 		{
@@ -462,7 +554,7 @@ int test(complex * s, int sample_count, uint8_t *out_data, bool *valid_data)
 		printf("preamble not found.\n");
 		return sample_count;
 	}
-// 	fclose(f);
+	fclose(f);
 
 	// apply coarse frequency offset for preambles only
 	for(int n=preamble_start; n<min(preamble_start+MAX_SYMBOLS_PER_SAMPLE*80, sample_count); n++)
@@ -472,13 +564,26 @@ int test(complex * s, int sample_count, uint8_t *out_data, bool *valid_data)
 		s[n] *= cordic(n*df_avg);//offset;
 	}
 
+
+	FILE * comp = fopen("comp_8bit.pcm", "wb");
+	for(int i=0; i<sample_count; i++)
+	{
+		int8_t I = s[i].real;
+		int8_t Q = s[i].image;
+		fwrite(&Q, 1, 1, comp);
+		fwrite(&I, 1, 1, comp);
+	}
+	fclose(comp);
+
+
+
 	// OFDM symbol alignment
 	// use long training sequence to find first symbol
-// 	f =fopen("alignment.csv", "wb");
-// 	fprintf(f, "N,P,A\n");
+	f =fopen("alignment.csv", "wb");
+	fprintf(f, "N,P,A\n");
 	float autocorrection_value[3] = {0};
 	int autocorrection_pos[3] = {0};
-	for(int n=80; n<320+50; n++)			// 160: number of sample of short training sequence
+	for(int n=50; n<220+50; n++)			// 160: number of sample of short training sequence
 		// 320: number of sample of long training sequence
 	{
 		complex a;
@@ -489,8 +594,10 @@ int test(complex * s, int sample_count, uint8_t *out_data, bool *valid_data)
 			p += s[preamble_start+n+k].sq_magnitude();//(s[preamble_start+n+k] * s[preamble_start+n+k].conjugate()).real;
 		}
 
+		p = max(max(p, s[n+64].magnitude()), s[n].magnitude());
+
 		float autocorelation = a.magnitude()/p;
-// 		fprintf(f, "%d,%f\n", n, autocorelation);
+		fprintf(f, "%d,%f,%f\n", n, autocorelation, s[n].magnitude());
 
 		for(int i=0; i<3; i++)
 		{
@@ -514,7 +621,7 @@ int test(complex * s, int sample_count, uint8_t *out_data, bool *valid_data)
 	for(int i=0; i<3; i++)
 		if (autocorrection_pos[i] > peak_pos)
 			peak_pos = autocorrection_pos[i];
-// 	fclose(f);
+	fclose(f);
 
 	printf("long training sequence @ %d of preamble\n", peak_pos);
 	int symbol_start = preamble_start + peak_pos + 64;
@@ -623,7 +730,7 @@ int test(complex * s, int sample_count, uint8_t *out_data, bool *valid_data)
 		|| signal_decoded_bits[4] != 0
 		|| parity != signal_decoded_bits[17]
 		|| !tail_is_zero
-		|| length > 1024
+// 		|| length > 1024
 		)
 	{
 		printf("invalid signal field\n");
@@ -741,25 +848,25 @@ int test(complex * s, int sample_count, uint8_t *out_data, bool *valid_data)
 	ALIGN uint8_t service_and_data_decoded_bits[8192*8];
 	int pos = 0;
 
-// 	FILE * constellation = fopen("constellation.csv", "wb");
-// 	fprintf(f, "N,P,A\n");
-// 	for(int i=1; i<symbol_count; i++)
-// 	{
-// 		for(int j=-26; j<=26; j++)
-// 		{
-// 			if (j == 0)
-// 				continue;
-// 
-// 			int n = j>0?j:j+64;
-// // 			if ((n==7||n==21||n==-7||n==-21||n==64-7||n==64-21))
-// // 				continue;
-// 
-// 			complex v = symbols[i][n];
-// 
-// 			//fprintf(constellation, "%d,%f,%f,%f\n", i, v.real, v.image, v.argument());
-// 		}
-// 	}
-// 	fclose(constellation);
+	FILE * constellation = fopen("constellation.csv", "wb");
+	fprintf(f, "N,P,A\n");
+	for(int i=1; i<symbol_count; i++)
+	{
+		for(int j=-26; j<=26; j++)
+		{
+			if (j == 0)
+				continue;
+
+			int n = j>0?j:j+64;
+			if ((n==7||n==21||n==-7||n==-21||n==64-7||n==64-21))
+				continue;
+
+			complex v = symbols[i][n];
+
+			fprintf(constellation, "%d,%f,%f,%f\n", i, v.real, v.image, v.argument());
+		}
+	}
+	fclose(constellation);
 
 	mapper demapper = modulation2demapper(mod);
 	int * pattern = modulation2inerleaver_pattern(mod);
@@ -795,16 +902,10 @@ int test(complex * s, int sample_count, uint8_t *out_data, bool *valid_data)
 		ntraceback = 9;
 	if (pun == _3_4)
 		ntraceback = 10;
-	printf("l:%d\n", __LINE__);
-	fflush(stdout);
 	viterbi_decoder dec2;
 	dec2.decode(service_and_data_deinterleaved_bits, service_and_data_decoded_bits, bits_count+16, ntraceback);
 	uint8_t out_bytes[8192];
-	printf("l:%d\n", __LINE__);
-	fflush(stdout);
 	descramble(service_and_data_decoded_bits, out_bytes, data_bit_per_symbol*data_symbol_count);
-	printf("l:%d\n", __LINE__);
-	fflush(stdout);
 
 	uint32_t crc = crc32_80211(out_bytes+2, length-4);
 	uint8_t *p = out_bytes+ 2+length-4;
@@ -816,79 +917,301 @@ int test(complex * s, int sample_count, uint8_t *out_data, bool *valid_data)
 // 	fwrite(out_bytes+2, 1, length, f);
 // 	fclose(f);
 
-	memcpy(out_data, out_bytes+2, length);
-	*valid_data = crc == crc_received;
+	if (crc == crc_received)
+	{
+		memcpy(out_data, out_bytes+2, length);
+		*valid_data_len =  length;
+	}
+	else
+	{
+		*valid_data_len = 0;
+	}
 
 	printf("%dms\n", GetTickCount()-l);
 	return symbol_start + symbol_count * 80;
 }
 
 
-int main()
+float randf()
 {
-	init_LTS();
-	init_scrambler();
-	init_interleaver_pattern();
-	init_cordic();
+	int32_t v = ((rand()&0xff) << 24) | ((rand()&0xff) << 16) | ((rand()&0xff) << 8) | ((rand()&0xff) << 0);
+	return v/2147483648.0f;
+}
 
-	for(int i=0; i<100; i++)
+int tx(uint8_t *psdu, int count, complex **out, int mbps = 6)
+{
+	float scale = 32767;
+
+	modulation mod = rate2modulation(mbps);
+	puncturing pun = rate2puncturing(mbps);
+	int data_bits_per_symbol = mod*48 * pun/12;
+	int bits_per_symbol = 48*mod;
+	int data_symbol_count = (count*8+16+6 + data_bits_per_symbol-1) / data_bits_per_symbol;		// 16: SERVICE field, 6: tail
+	int data_bits_count_padded = data_symbol_count * data_bits_per_symbol;
+	int sample_count = (data_symbol_count+1)*80+320+200;
+	complex *s = new complex[sample_count];
+	*out = s;
+
+	// short training sequence
+	for(int i=0; i<160; i++)
+		s[i] = ST_time_space[i];
+
+	// GI2
+	for(int i=0; i<32; i++)
+		s[i+160] = LT_time_space[i+32];
+
+	// long training sequence
+	for(int i=0; i<128; i++)
+		s[i+192] = LT_time_space[i];
+
+	int rate_code = mbps_to_rate_code(mbps);
+	uint8_t signal_bits[24] = 
 	{
-		viterbi_decoder *p = new viterbi_decoder;
-		printf("%08x\n", p->d_metric0);
+		(rate_code>>3)&1, (rate_code>>2)&1, (rate_code>>1)&1, (rate_code>>0)&1,
+		0,				// "reserved bit"
+	};
+
+	for(int i=0; i<12; i++)						// "LENGTH"
+		signal_bits[i+5] = (count >> i) & 1;
+
+	for(int i=0; i<17; i++)						// "parity"
+		signal_bits[17] ^= signal_bits[i];
+
+	// encode ( no puncturing for signal symbol)
+	uint8_t signal_bits_encoded[48];
+	convolutional_encoding(signal_bits, signal_bits_encoded, 24);
+
+	// interleave
+	uint8_t signal_bits_interleaved[48];
+	for(int i=0; i<48; i++)
+		signal_bits_interleaved[interleave_pattern[0][i]] = signal_bits_encoded[i];
+
+	// modulation
+	complex signal_symbol[64];
+	for(int i=-26, j=0; i<=26; i++)
+	{
+		if (i == 0 || i == -7 || i == -21 || i == 7 || i == 21)
+			continue;
+		
+		signal_symbol[i>0?i:i+64] = signal_bits_interleaved[j++] ? scale : - scale;
+	}
+
+	// pilot tones
+	signal_symbol[7].real = scale;
+	signal_symbol[21].real = -scale;
+	signal_symbol[64-7].real = scale;
+	signal_symbol[64-21].real = scale;
+
+
+	complex signal_symbol_ifft[64];
+	fft_complex(signal_symbol, signal_symbol_ifft, true);
+
+
+
+	for(int i=0; i<16; i++)
+		s[i+320] = signal_symbol_ifft[i+48];
+	for(int i=0; i<64; i++)
+		s[i+336] = signal_symbol_ifft[i];
+
+	// data scrambling and add service field
+	uint8_t data_bits[4096*8] = {1, 1, 1, 1, 1, 1, 1};		// we always use scrambler starting from all ones state
+	for(int i=0; i<9; i++)
+	{
+		data_bits[i+7] ^= scrambler[i];
 	}
 
 
+	for(int i=0; i<count; i++)
+	{
+		for(int j=0; j<8; j++)
+		{
+			data_bits[16+i*8+j] = ((psdu[i]>>j)&1) ^ (scrambler[(i*8+j+9)%127]);
+		}
+	}
+
+// 	uint8_t descramble_bytes[4096] = {0};
+// 	descramble(data_bits, descramble_bytes, data_bits_count_padded);
+
+	// convolutional encoding and puncturing
+	uint8_t data_bits_encoded[8192*8];
+	convolutional_encoding(data_bits, data_bits_encoded, data_bits_count_padded);
+	int bits_count_punctured = puncture(data_bits_encoded, data_bits_count_padded*2, pun);
+	assert(bits_count_punctured == data_symbol_count*bits_per_symbol);
+
+	// interleave
+	uint8_t data_bits_interleaved[8192*8];
+	int *pattern = modulation2inerleaver_pattern(mod);
+
+	for(int i=0; i<data_symbol_count; i++)
+	{
+		uint8_t *p2 = data_bits_interleaved+ bits_per_symbol*i;
+		uint8_t *p = data_bits_encoded+ bits_per_symbol*i;
+		for(int j=0; j<bits_per_symbol; j++)
+			p2[pattern[j]] = p[j];
+	}
+
+	// modulation, add pilot tones and output
+	mapper mapper = modulation2mapper(mod);
+	for(int i=0; i<data_symbol_count; i++)
+	{
+		complex symbol_fre[64];
+		complex symbol_time[64];
+
+		// data mapper
+		mapper(symbol_fre, data_bits_interleaved + bits_per_symbol*i);
+		
+		// pilot tone
+		float pilot = scrambler[(i+1)%127] ? -1 : 1;
+		symbol_fre[7].real = pilot;
+		symbol_fre[21].real = -pilot;
+		symbol_fre[64-7].real = pilot;
+		symbol_fre[64-21].real = pilot;
+
+		// scale
+		for(int j=0; j<64; j++)
+		{
+			symbol_fre[j].real *= scale;
+			symbol_fre[j].image *= scale;
+		}
+
+		// ifft
+		fft_complex(symbol_fre, symbol_time, true);
+
+		// out: GI + symbol
+		for(int j=0; j<16; j++)
+			s[400+i*80+j] = symbol_time[j+48];		// 400: ST+LT+SIGNAL
+		for(int j=0; j<64; j++)
+			s[400+i*80+16+j] = symbol_time[j];		// 400: ST+LT+SIGNAL
+	}
+
+
+	FILE * f = fopen("out_8bit.pcm", "wb");
+	for(int i=0; i<sample_count; i++)
+	{
+		int8_t I = -s[i].real / 256 * 2;
+		int8_t Q = -s[i].image / 256 * 2;
+		fwrite(&Q, 1, 1, f);
+		fwrite(&I, 1, 1, f);
+	}
+	fclose(f);
+
+	f = fopen("out_16bit.pcm", "wb");
+	for(int i=0; i<sample_count; i++)
+	{
+		int m = 1;
+		int16_t I = int((s[i].real * 1.2 + (rand()&0xff-128)*m/float(m*2)) / m) * m;
+		int16_t Q = int((s[i].image * 1.2 + (rand()&0xff-128)*m/float(m*2)) / m) * m;
+		fwrite(&Q, 1, 2, f);
+		fwrite(&I, 1, 2, f);
+
+	}
+	fclose(f);
+
+// 	uint8_t decoded_data[4096] = {0};
+// 	int decoded_count = 0;
+// 	rx(s, sample_count, decoded_data, &decoded_count);
+
+	return 0;
+}
+
+
+int main()
+{
+	init_training_sequence();
+	init_scrambler();
+	init_interleaver_pattern();
+	init_cordic();
+	init_ones();
+
+	uint8_t psdu[500] = 
+	{
+		0x08, 0x01, 						// FC: frame control
+		0x00, 0x01,							// DID: duration or ID
+		0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,	// address1
+		0x13, 0x22, 0x33, 0x44, 0x55, 0x66,	// address2
+		0x13, 0x22, 0x33, 0x44, 0x55, 0x66,	// address3
+		0x10, 0x86,							// SC: Sequence control
+	};
+
+
+	uint32_t crc = crc32_80211(psdu, sizeof(psdu)-4);
+	psdu[sizeof(psdu)-4+3] = (crc >> 24)&0xff;
+	psdu[sizeof(psdu)-4+2] = (crc >> 16)&0xff;
+	psdu[sizeof(psdu)-4+1] = (crc >> 8)&0xff;
+	psdu[sizeof(psdu)-4+0] = (crc >> 0)&0xff;
+	complex *s_gen = NULL;
+	tx(psdu, sizeof(psdu), &s_gen, 54);
+	delete [] s_gen;
+
 	fprintf(stderr, "reading....");
-	FILE * f = fopen("testcases\\video.pcm", "rb");
+	char file[] = "out_8bit.pcm";
+	bool _8bit = strstr(file, "8bit");
+	FILE * f = fopen(file, "rb");
 	if (!f)
 	{
 		printf("failed opening file\n");
 		return 0;
 	}
-	printf("go\n");
 	fseek(f, 0, SEEK_END);
 	int file_size = ftell(f);
 	fseek(f, 0, SEEK_SET);
-	printf("go2\n");
 
 	int sample_count = file_size/4;
 	short * data = new short[file_size/2];
-	printf("go3:%08x\n", data);
 	fread(data, 1, file_size, f);
-	printf("go4:%08x\n", data);
 	fclose(f);
-	printf("go5:%08x\n", data);
 
-	complex *s = new complex[sample_count];
-	printf("%08x\n", s);
-	for(int i=0; i<sample_count; i++)
+	complex *s = NULL;
+	if (!_8bit)
 	{
-		// 		float n = (rand()&0xff-128)*13.0f/255;
-		int n=0;
-		s[i].real = data[i*2+1]/256 + n;		// revert IQ
-		s[i].image = data[i*2+0]/256 + n;
+		s = new complex[sample_count];
+		for(int i=0; i<sample_count; i++)
+		{
+			s[i].real = data[i*2+1]/256;		// revert IQ
+			s[i].image = data[i*2+0]/256;
+		}
+		delete data;
 	}
-	delete data;
+	else
+	{
+		sample_count *= 2;
+		int8_t *data8 = (int8_t*)data;
+		s = new complex[sample_count];
+		for(int i=0; i<sample_count; i++)
+		{
+			s[i].real = data8[i*2+1];		// revert IQ
+			s[i].image = data8[i*2+0];
+		}
+		delete data;
+	}
 
 	fprintf(stderr, "done %d samples\n", sample_count);
 	int l = GetTickCount();
 
+	f = fopen("data.pkt", "wb");
+
 	int pos = 0;
 	int kk = 0;
 	uint8_t data_out[8192];
-	bool valid = false;
+	int valid_size = 0;
 	int valid_count = 0;
 	while(sample_count > pos)
 	{
-		int c = test(s+pos, sample_count-pos, data_out, &valid);
+		int c = rx(s+pos, sample_count-pos, data_out, &valid_size);
 		pos += c;
-		if (valid)
+		if (valid_size)
 			valid_count ++ ;
 
 		fprintf(stderr, "\r%d/%d ", valid_count, kk++);
+
+		if (valid_size)
+		{
+			fwrite(&valid_size, 1, 4, f);
+			fwrite(data_out, 1, valid_size, f);
+		}
 	}
 
-		
+	fclose(f);
 
 	l = GetTickCount() - l;
 
