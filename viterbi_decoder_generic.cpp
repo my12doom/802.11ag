@@ -30,6 +30,8 @@
 #include "viterbi_decoder_generic.h"
 #include <cstring>
 #include <iostream>
+#include "common.h"
+
 
 /* The basic Viterbi decoder operation, called a "butterfly"
  * operation because of the way it looks on a trellis diagram. Each

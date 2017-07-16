@@ -20,7 +20,12 @@
 #include <stdint.h>
 #define TRACEBACK_MAX 24
 #define MAX_ENCODED_BITS (4096*8)
+
+#ifdef WIN32
 #define ALIGN __declspec( align( 32 ) )
+#else
+#define ALIGN
+#endif
 
 namespace gr {
 namespace ieee802_11 {

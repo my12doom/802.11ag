@@ -18,13 +18,22 @@
 #define INCLUDED_IEEE802_11_VITERBI_DECODER_X86_H
 
 #include <stdint.h>
+
+#ifdef WIN32
 #include <xmmintrin.h>
 #include <intrin.h>
+#define ALIGN __declspec( align( 32 ) )
+#else
+#include <x86intrin.h>
+#define ALIGN __attribute__ ((aligned(16)))
+#define _aligned_malloc _mm_malloc
+#define _aligned_free _mm_free
+#endif
 #include <stdio.h>
 
 #define TRACEBACK_MAX 24
 #define MAX_ENCODED_BITS (4096*8)
-#define ALIGN __declspec( align( 32 ) )
+
 
 namespace gr {
 namespace ieee802_11 {
