@@ -1,8 +1,10 @@
 #include <stdio.h>
 #include <math.h>
 #include <stdint.h>
-#include <Windows.h>
 #include <assert.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
 #include "Fourier.h"
 #include "complex.h"
 #include "line_fitting.h"
@@ -10,6 +12,10 @@
 #include "crc32_80211.h"
 #include "common.h"
 #include "mapper.h"
+
+#ifdef WIN32
+#include <Windows.h>
+#endif
 
 using namespace gr::ieee802_11;
 
@@ -71,6 +77,17 @@ int init_interleaver_pattern()
 	}
 
 	return 0;
+}
+
+uint32_t gettime()
+{
+	#ifdef WIN32
+	return GetTickCount();
+	#else
+	struct timespec tv;  
+	clock_gettime(CLOCK_MONOTONIC, &tv);    
+	return (uint32_t)tv.tv_sec * 1000 + tv.tv_nsec/1000000;
+	#endif
 }
 
 int * modulation2inerleaver_pattern(modulation mod)
@@ -474,7 +491,7 @@ int test_convolutional_code()
 
 int rx(complex * s, int sample_count, uint8_t *out_data, int *valid_data_len)
 {
-	int l = GetTickCount();
+	int l = gettime();
 	*valid_data_len = 0;
 
 	FILE * f;
@@ -693,7 +710,7 @@ int rx(complex * s, int sample_count, uint8_t *out_data, int *valid_data_len)
 	for(int i=0; i<48; i++)
 		signal_bits_deinterleaved[i] = signal_bits[interleave_pattern[0][i]];
 
-	printf("\ndecoded:%08x\n", signal_bits_deinterleaved);
+	printf("\ndecoded:\n");
 	viterbi_decoder *dec = new viterbi_decoder;
 	dec->decode(signal_bits_deinterleaved, signal_decoded_bits, 48);
 	delete dec;
@@ -927,7 +944,7 @@ int rx(complex * s, int sample_count, uint8_t *out_data, int *valid_data_len)
 		*valid_data_len = 0;
 	}
 
-	printf("%dms\n", GetTickCount()-l);
+	printf("%dms\n", gettime()-l);
 	return symbol_start + symbol_count * 80;
 }
 
@@ -1014,7 +1031,7 @@ int tx(uint8_t *psdu, int count, complex **out, int mbps = 6)
 		s[i+336] = signal_symbol_ifft[i];
 
 	// data scrambling and add service field
-	uint8_t data_bits[4096*8] = {1, 1, 1, 1, 1, 1, 1};		// we always use scrambler starting from all ones state
+	uint8_t data_bits[4096*8] = {1, 1, 1, 1, 1, 1, 1, 0};		// we always use scrambler starting from all ones state
 	for(int i=0; i<9; i++)
 	{
 		data_bits[i+7] ^= scrambler[i];
@@ -1186,7 +1203,7 @@ int main()
 	}
 
 	fprintf(stderr, "done %d samples\n", sample_count);
-	int l = GetTickCount();
+	int l = gettime();
 
 	f = fopen("data.pkt", "wb");
 
@@ -1213,7 +1230,7 @@ int main()
 
 	fclose(f);
 
-	l = GetTickCount() - l;
+	l = gettime() - l;
 
 	printf("total:%d\n", l);
 
