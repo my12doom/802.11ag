@@ -22,6 +22,25 @@ of course all things down below are to be done by SDR, not wifi cards.
 + Understand tradeoffs in wifi standards, improve them and implement a better data link (goal).
 + FPGA/Hardware implementations (dream)
 
+
+### TODOs:
++ Soft decision decoding of convolutional code
++ Robust/better preamble detection, carrier/samping frequnecy offset compensation, and reception without preambles.
++ Frame slicer, noise floor calculation.
++ EVM、BER outputs
+
 ----------
 # Coding
 + Standard C++ or assembly, no external libraries.
+
+
+----------
+# Reference
++ Introduction to IEEE 802.11a WLAN System. institude of communications engineering, national sun yat-sen university.
++ An IEEE 802.11a/g/p OFDM Receiver for GNU Radio. Bastian Bloessl*
+, Michele Segata*y
+, Christoph Sommer* and Falko Dressler*
+*
+Institute of Computer Science, University of Innsbruck, Austria
+yDept. of Information Engineering and Computer Science, University of Trento, Italy
++ [gr-ieee802-11](https://github.com/bastibl/gr-ieee802-11)
