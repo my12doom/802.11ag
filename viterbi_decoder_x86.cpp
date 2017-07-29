@@ -58,11 +58,12 @@
 
 #ifdef IEEE80211_MSSE2
 
+/*
 #define BUTTERFLY(i,sym) {											\
 		int m0,m1,m2,m3;											\
-		/* ACS for 0 branch */										\
-		m0 = state[i].metric + mets[sym];	/* 2*i */				\
-		m1 = state[i+32].metric + mets[3 ^ sym];	/* 2*i + 64 */	\
+		// ACS for 0 branch 										\
+		m0 = state[i].metric + mets[sym];	// 2*i 				\
+		m1 = state[i+32].metric + mets[3 ^ sym];	// 2*i + 64 	\
 		if(m0 > m1){												\
 			next[2*i].metric = m0;									\
 			next[2*i].path = state[i].path << 1;					\
@@ -70,9 +71,9 @@
 			next[2*i].metric = m1;									\
 			next[2*i].path = (state[i+32].path << 1)|1;				\
 		}															\
-		/* ACS for 1 branch */										\
-		m2 = state[i].metric + mets[3 ^ sym];	/* 2*i + 1 */		\
-		m3 = state[i+32].metric + mets[sym];	/* 2*i + 65 */		\
+		// ACS for 1 branch									\
+		m2 = state[i].metric + mets[3 ^ sym];	// 2*i + 1 //		\
+		m3 = state[i+32].metric + mets[sym];	// 2*i + 65 //		\
 		if(m2 > m3){												\
 			next[2*i+1].metric = m2;								\
 			next[2*i+1].path = state[i].path << 1;					\
@@ -81,6 +82,8 @@
 			next[2*i+1].path = (state[i+32].path << 1)|1;			\
 		}															\
 	}
+
+	*/
 
 using namespace gr::ieee802_11;
 
@@ -255,9 +258,10 @@ int viterbi_decoder::decode(uint8_t *in, uint8_t *output, int input_count, int n
 	int out_count = 0;
 	int n_decoded = 0;
 
-	while(n_decoded < input_count) {
+	while(n_decoded < input_count/2) {
 
 		if ((in_count % 4) == 0) { //0 or 3
+
 			viterbi_butterfly2_sse2(&in[in_count & 0xfffffffc], d_metric0, d_metric1, d_path0, d_path1);
 
 			if ((in_count > 0) && (in_count % 16) == 8) { // 8 or 11
@@ -384,7 +388,7 @@ viterbi_decoder::viterbi_decoder()
 	d_metric0 = (__m128i*)_aligned_malloc(64, 16);
 	d_metric1 = (__m128i*)_aligned_malloc(64, 16);
 	d_path0 = (__m128i*)_aligned_malloc(64, 16);
-	d_path1 = (__m128i*)_aligned_malloc(64, 16);
+	d_path1 = (__m128i*)_aligned_malloc(128, 16);
 	d_mmresult = (unsigned char *)_aligned_malloc(64, 16);
 	for(int i=0; i<TRACEBACK_MAX; i++)
 		d_ppresult[i] = (unsigned char *)_aligned_malloc(64, 16);
