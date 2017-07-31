@@ -873,8 +873,8 @@ int slice_and_decode(int16_t *s, int sample_count, uint8_t *out_data, int *valid
 
 		for(int k=0; k<Nwindow; k++)
 		{
-			a[0] += (int64_t)s[(n+k)*2+1] * s[(n+k+16)*2+1] - s[(n+k)*2+0] * -s[(n+k+16)*2+0];
-			a[1] += (int64_t)s[(n+k)*2+1] * -s[(n+k+16)*2+0] + s[(n+k)*2+0] * s[(n+k+16)*2+1];
+			a[0] += s[(n+k)*2+1] * s[(n+k+16)*2+1] - s[(n+k)*2+0] * -s[(n+k+16)*2+0];
+			a[1] += s[(n+k)*2+1] * -s[(n+k+16)*2+0] + s[(n+k)*2+0] * s[(n+k+16)*2+1];
 
 			p += s[(n+k)*2+0] * s[(n+k)*2+0] + s[(n+k)*2+1] * s[(n+k)*2+1];
 
@@ -886,11 +886,11 @@ int slice_and_decode(int16_t *s, int sample_count, uint8_t *out_data, int *valid
 		{
 			//_f += s[n+k+Nwindow+16] * s[n+k+16+Nwindow+16].conjugate();	// note:latency ~= Nwindow+16
 
-			_f[0] += (int64_t)s[(n+k+Nwindow+16)*2+1] * s[(n+k+Nwindow+32)*2+1] - (int64_t)s[(n+k+Nwindow+16)*2+0] * -s[(n+k+Nwindow+32)*2+0];
-			_f[1] += (int64_t)s[(n+k+Nwindow+16)*2+1] * -s[(n+k+Nwindow+32)*2+0] + (int64_t)s[(n+k+Nwindow+16)*2+0] * s[(n+k+Nwindow+32)*2+1];
+			_f[0] += s[(n+k+Nwindow+16)*2+1] * s[(n+k+Nwindow+32)*2+1] - s[(n+k+Nwindow+16)*2+0] * -s[(n+k+Nwindow+32)*2+0];
+			_f[1] += s[(n+k+Nwindow+16)*2+1] * -s[(n+k+Nwindow+32)*2+0] + s[(n+k+Nwindow+16)*2+0] * s[(n+k+Nwindow+32)*2+1];
 		}
 
-		p = max(p, Nwindow*4);	// reject false positive in weak signal
+		p = max(p, Nwindow*20);	// reject false positive in weak signal
 
 		float autocorrelation = sqrt((float)a[0]*a[0]+a[1]*a[1]) / p;
 		float df = atan2((double)_f[1], (double)_f[0])/16.0f;		// - _f.argument();
@@ -914,7 +914,6 @@ int slice_and_decode(int16_t *s, int sample_count, uint8_t *out_data, int *valid
 		else
 		{
 			preamble_found = false;
-			printf("");
 		}
 
 		if (avg_count > 63)
@@ -1194,20 +1193,26 @@ int main()
 	int file_size = ftell(f);
 	fseek(f, 0, SEEK_SET);
 
-	int sample_count = file_size/4;
-	int16_t * data = new short[file_size/2];
-	fread(data, 1, file_size, f);
-	fclose(f);
-
-	if(_8bit)
+	int16_t * data;
+	int sample_count;
+	
+	if (!_8bit)
 	{
-		int8_t * data8 = (int8_t*)data;
-		sample_count *= 2;
-		data = new int16_t[sample_count];
-		for(int i=0; i<sample_count; i++)
-			data[i] = data8[i]*256;
+		sample_count = file_size/4;
+		data = new short[sample_count*2];
+		fread(data, 1, file_size, f);
+	}
+	else
+	{
+		int8_t * data8 = new int8_t[file_size];
+		fread(data8, 1, file_size, f);
+		sample_count = file_size/2;
+		data = new int16_t[sample_count*2];
+		for(int i=0; i<sample_count*2; i++)
+			data[i] = data8[i];
 		delete [] data8;
 	}
+	fclose(f);
 
 	fprintf(stderr, "done %d samples\n", sample_count);
 	int l = gettime();
