@@ -488,111 +488,12 @@ int test_convolutional_code()
 	return 0;
 }
 
-
-int rx(complex * s, int sample_count, uint8_t *out_data, int *valid_data_len)
+int frame_decoding(complex * s, int sample_count, uint8_t *out_data, int *valid_data_len)
 {
 	int l = gettime();
 	*valid_data_len = 0;
 
 	FILE * f;
-
-	f =fopen("ShortTraining.csv", "wb");
-	fprintf(f, "N,P,A\n");
-
-	int Nwindow = 48;
-
-	float df_avg = 0;
-	int avg_count = 0;
-
-	bool preamble_found = false;
-	float autocorrelation_throthold = 0.80;
-	int preamble_start = 0;
-
-	for(int n=0; n<sample_count-64; n++)
-	{
-		complex a;
-		float p = 0;
-		complex _f;
-		for(int k=0; k<Nwindow; k++)
-			a += s[n+k] * s[n+k+16].conjugate();
-		for(int k=0; k<Nwindow; k++)
-			p += s[n+k].sq_magnitude(); //s[n+k] * s[n+k].conjugate();
-		for(int k=0; k<16; k++)
-			_f += s[n+k+Nwindow+16] * s[n+k+16+Nwindow+16].conjugate();	// note:latency ~= Nwindow+16
-
-		if (p < Nwindow*4)
-		{
-			preamble_found = false;
-			continue;
-		}
-
-		float autocorrelation = a.magnitude() / p;
-		float df = _f.argument()/16.0f;
-		if (autocorrelation>1)
-			autocorrelation = 1;
-
-		fprintf(f, "%f,%f,%f\n", float(n), autocorrelation*1000, s[n+Nwindow+16].magnitude());
-
-		if (autocorrelation > autocorrelation_throthold && !preamble_found)
-		{
-			df_avg += df;
-			avg_count ++;
-
-// 			printf("%d:%f\n", n, df);
-
-			if (preamble_start == 0)
-				preamble_start = n+Nwindow+16;		// note:latency ~= Nwindow+16
-		}
-		else if (avg_count > 3 && autocorrelation < autocorrelation_throthold)
-		{
-			preamble_found = true;
-		}
-		else
-		{
-			printf("");
-		}
-
-		if (avg_count > 70)
-		{
-			preamble_found = true;
-			break;
-		}
-	}
-
-	df_avg /= avg_count;
-
-	if (preamble_found)
-	{
-		printf("found short training sequence @ %d sample(%fus), avg_count=%d.\n"
-			"coarse frequency offset:%f degree / sample (%f Mhz)\n", preamble_start, preamble_start/20.0f, avg_count, df_avg * 180 / PI, 20 / (2 * PI / df_avg) );
-	}
-	else
-	{
-		printf("preamble not found.\n");
-		return sample_count;
-	}
-	fclose(f);
-
-	// apply coarse frequency offset for preambles only
-	for(int n=preamble_start; n<min(preamble_start+MAX_SYMBOLS_PER_SAMPLE*80, sample_count); n++)
-	{	
-		// s2[n] = s[n] * e^(i*n*df)
-		//complex offset(cos(n*df_avg), sin(n*df_avg));
-		s[n] *= cordic(n*df_avg);//offset;
-	}
-
-
-	FILE * comp = fopen("comp_8bit.pcm", "wb");
-	for(int i=0; i<sample_count; i++)
-	{
-		int8_t I = s[i].real;
-		int8_t Q = s[i].image;
-		fwrite(&Q, 1, 1, comp);
-		fwrite(&I, 1, 1, comp);
-	}
-	fclose(comp);
-
-
 
 	// OFDM symbol alignment
 	// use long training sequence to find first symbol
@@ -600,15 +501,15 @@ int rx(complex * s, int sample_count, uint8_t *out_data, int *valid_data_len)
 	fprintf(f, "N,P,A\n");
 	float autocorrection_value[3] = {0};
 	int autocorrection_pos[3] = {0};
-	for(int n=50; n<220+50; n++)			// 160: number of sample of short training sequence
+	for(int n=0; n<360+50; n++)			// 160: number of sample of short training sequence
 		// 320: number of sample of long training sequence
 	{
 		complex a;
 		float p = 0;
 		for(int k=0; k<64; k++)
 		{
-			a += s[preamble_start+n+k] * LT_time_space[k].conjugate();
-			p += s[preamble_start+n+k].sq_magnitude();//(s[preamble_start+n+k] * s[preamble_start+n+k].conjugate()).real;
+			a += s[n+k] * LT_time_space[k].conjugate();
+			p += s[n+k].sq_magnitude();//(s[preamble_start+n+k] * s[preamble_start+n+k].conjugate()).real;
 		}
 
 		p = max(max(p, s[n+64].magnitude()), s[n].magnitude());
@@ -641,7 +542,7 @@ int rx(complex * s, int sample_count, uint8_t *out_data, int *valid_data_len)
 	fclose(f);
 
 	printf("long training sequence @ %d of preamble\n", peak_pos);
-	int symbol_start = preamble_start + peak_pos + 64;
+	int symbol_start = peak_pos + 64;
 	printf("symbols start @ %d (%.1fus)\n", symbol_start, symbol_start/20.0f);
 
 	// fine frequency offset
@@ -948,6 +849,125 @@ int rx(complex * s, int sample_count, uint8_t *out_data, int *valid_data_len)
 	return symbol_start + symbol_count * 80;
 }
 
+// detect short preambles and feed packet decoder.
+int slice_and_decode(int16_t *s, int sample_count, uint8_t *out_data, int *valid_data_len)
+{
+	FILE * f =fopen("ShortTraining.csv", "wb");
+	fprintf(f, "N,P,A\n");
+
+	int Nwindow = 48;
+
+	float df_avg = 0;
+	int avg_count = 0;
+
+	bool preamble_found = false;
+	float autocorrelation_throthold = 0.80;
+	int preamble_start = 0;
+
+	for(int n=0; n<sample_count-64; n++)
+	{
+		int64_t a[2] = {0};			// autocorrelation, [i,q]
+		int64_t p = 0;				// amplitude normalizer
+		int64_t _f[2] = {0};		// frequency offset, [i,q]
+
+
+		for(int k=0; k<Nwindow; k++)
+		{
+			a[0] += s[(n+k)*2+1] * s[(n+k+16)*2+1] - s[(n+k)*2+0] * -s[(n+k+16)*2+0];
+			a[1] += s[(n+k)*2+1] * -s[(n+k+16)*2+0] + s[(n+k)*2+0] * s[(n+k+16)*2+1];
+
+			p += s[(n+k)*2+0] * s[(n+k)*2+0] + s[(n+k)*2+1] * s[(n+k)*2+1];
+
+			//a += s[n+k] * s[n+k+16].conjugate();
+			//p += s[n+k].sq_magnitude();
+		}
+
+		for(int k=0; k<16; k++)
+		{
+			//_f += s[n+k+Nwindow+16] * s[n+k+16+Nwindow+16].conjugate();	// note:latency ~= Nwindow+16
+
+			_f[0] += s[(n+k+Nwindow+16)*2+1] * s[(n+k+Nwindow+32)*2+1] - s[(n+k+Nwindow+16)*2+0] * -s[(n+k+Nwindow+32)*2+0];
+			_f[1] += s[(n+k+Nwindow+16)*2+1] * -s[(n+k+Nwindow+32)*2+0] + s[(n+k+Nwindow+16)*2+0] * s[(n+k+Nwindow+32)*2+1];
+		}
+
+		p = max(p, Nwindow*20);	// reject false positive in weak signal
+
+		float autocorrelation = sqrt((float)a[0]*a[0]+a[1]*a[1]) / p;
+		float df = atan2((double)_f[1], (double)_f[0])/16.0f;		// - _f.argument();
+
+// 		fprintf(f, "%f,%f,%.0f\n", float(n), autocorrelation*1000, sqrt((float)s[(n+Nwindow+16)*2] * s[(n+Nwindow+16)*2] + s[(n+Nwindow+16)*2+1] + s[(n+Nwindow+16)*2+1]));
+
+		if (autocorrelation > autocorrelation_throthold && !preamble_found)
+		{
+			df_avg += df;
+			avg_count ++;
+
+			int q = _f[1] / 65536;
+
+			if (preamble_start == 0)
+				preamble_start = n+Nwindow+16;		// note:latency ~= Nwindow+16
+		}
+		else if (avg_count > 3 && autocorrelation < autocorrelation_throthold)
+		{
+			preamble_found = true;
+		}
+		else
+		{
+			preamble_found = false;
+		}
+
+		if (avg_count > 63)
+		{
+			preamble_found = true;
+			break;
+		}
+	}
+
+	df_avg /= avg_count;
+
+	if (preamble_found)
+	{
+		printf("found short training sequence @ %d sample(%fus), avg_count=%d.\n"
+			"coarse frequency offset:%f degree / sample (%f Mhz)\n", preamble_start, preamble_start/20.0f, avg_count, df_avg * 180 / PI, 20 / (2 * PI / df_avg) );
+	}
+	else
+	{
+		printf("preamble not found.\n");
+		return sample_count;
+	}
+	fclose(f);
+
+
+	// copy to complex and apply coarse frequency offset;
+	complex pkt[MAX_SYMBOLS_PER_SAMPLE*80+320];
+	int pkt_size = min(MAX_SYMBOLS_PER_SAMPLE*80, sample_count-preamble_start);
+	for(int n=0; n<pkt_size; n++)
+	{
+		// s2[n] = s[n] * e^(i*n*df)
+		//complex offset(cos(n*df_avg), sin(n*df_avg));
+		pkt[n] = complex(s[(n+preamble_start)*2+1], s[(n+preamble_start)*2+0]);	// note: reverse IQ
+		pkt[n] *= cordic((n)*df_avg);//offset;
+	}
+
+// 	FILE * comp = fopen("comp_8bit.pcm", "wb");
+// 	for(int i=0; i<pkt_size; i++)
+// 	{
+// 		int8_t I = pkt[i].real/256;
+// 		int8_t Q = pkt[i].image/256;
+// 		fwrite(&Q, 1, 1, comp);
+// 		fwrite(&I, 1, 1, comp);
+// 	}
+// 	fclose(comp);
+
+
+	int pkt_result = frame_decoding(pkt, pkt_size, out_data, valid_data_len);
+
+	if (pkt_result < 0)
+		return 320;
+
+	return pkt_result + preamble_start;
+}
+
 
 float randf()
 {
@@ -1105,8 +1125,8 @@ int tx(uint8_t *psdu, int count, complex **out, int mbps = 6)
 	FILE * f = fopen("out_8bit.pcm", "wb");
 	for(int i=0; i<sample_count; i++)
 	{
-		int8_t I = -s[i].real / 256 * 2;
-		int8_t Q = -s[i].image / 256 * 2;
+		int8_t I = -s[i].real / 256;
+		int8_t Q = -s[i].image / 256;
 		fwrite(&Q, 1, 1, f);
 		fwrite(&I, 1, 1, f);
 	}
@@ -1115,9 +1135,9 @@ int tx(uint8_t *psdu, int count, complex **out, int mbps = 6)
 	f = fopen("out_16bit.pcm", "wb");
 	for(int i=0; i<sample_count; i++)
 	{
-		int m = 1;
-		int16_t I = int((s[i].real * 1.2 + (rand()&0xff-128)*m/float(m*2)) / m) * m;
-		int16_t Q = int((s[i].image * 1.2 + (rand()&0xff-128)*m/float(m*2)) / m) * m;
+		int m = 512;
+		int16_t I = int((s[i].real + (rand()&0xff-127)*m/float(m*2)) / m) * m;
+		int16_t Q = int((s[i].image + (rand()&0xff-127)*m/float(m*2)) / m) * m;
 		fwrite(&Q, 1, 2, f);
 		fwrite(&I, 1, 2, f);
 
@@ -1128,7 +1148,7 @@ int tx(uint8_t *psdu, int count, complex **out, int mbps = 6)
 // 	int decoded_count = 0;
 // 	rx(s, sample_count, decoded_data, &decoded_count);
 
-	return 0;
+	return sample_count;
 }
 
 
@@ -1157,11 +1177,11 @@ int main()
 	psdu[sizeof(psdu)-4+1] = (crc >> 8)&0xff;
 	psdu[sizeof(psdu)-4+0] = (crc >> 0)&0xff;
 	complex *s_gen = NULL;
-	tx(psdu, sizeof(psdu), &s_gen, 54);
+	tx(psdu, sizeof(psdu), &s_gen, 48);
 	delete [] s_gen;
 
 	fprintf(stderr, "reading....");
-	char file[] = "out_8bit.pcm";
+	char file[] = "testcases\\wifi_12mbps_1frame_8bit.pcm";
 	bool _8bit = strstr(file, "8bit");
 	FILE * f = fopen(file, "rb");
 	if (!f)
@@ -1173,34 +1193,26 @@ int main()
 	int file_size = ftell(f);
 	fseek(f, 0, SEEK_SET);
 
-	int sample_count = file_size/4;
-	short * data = new short[file_size/2];
-	fread(data, 1, file_size, f);
-	fclose(f);
-
-	complex *s = NULL;
+	int16_t * data;
+	int sample_count;
+	
 	if (!_8bit)
 	{
-		s = new complex[sample_count];
-		for(int i=0; i<sample_count; i++)
-		{
-			s[i].real = data[i*2+1]/256;		// revert IQ
-			s[i].image = data[i*2+0]/256;
-		}
-		delete data;
+		sample_count = file_size/4;
+		data = new short[sample_count*2];
+		fread(data, 1, file_size, f);
 	}
 	else
 	{
-		sample_count *= 2;
-		int8_t *data8 = (int8_t*)data;
-		s = new complex[sample_count];
-		for(int i=0; i<sample_count; i++)
-		{
-			s[i].real = data8[i*2+1];		// revert IQ
-			s[i].image = data8[i*2+0];
-		}
-		delete data;
+		int8_t * data8 = new int8_t[file_size];
+		fread(data8, 1, file_size, f);
+		sample_count = file_size/2;
+		data = new int16_t[sample_count*2];
+		for(int i=0; i<sample_count*2; i++)
+			data[i] = data8[i];
+		delete [] data8;
 	}
+	fclose(f);
 
 	fprintf(stderr, "done %d samples\n", sample_count);
 	int l = gettime();
@@ -1214,7 +1226,7 @@ int main()
 	int valid_count = 0;
 	while(sample_count > pos)
 	{
-		int c = rx(s+pos, sample_count-pos, data_out, &valid_size);
+		int c = slice_and_decode(data+pos*2, sample_count-pos, data_out, &valid_size);
 		pos += c;
 		if (valid_size)
 			valid_count ++ ;
