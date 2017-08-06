@@ -15,6 +15,11 @@
 
 #ifdef WIN32
 #include <Windows.h>
+#include <intrin.h>
+#include <tmmintrin.h>
+#else
+#include <x86intrin.h>
+#include <tmmintrin.h>
 #endif
 
 using namespace gr::ieee802_11;
@@ -488,8 +493,13 @@ int test_convolutional_code()
 	return 0;
 }
 
-int frame_decoding(complex * s, int sample_count, uint8_t *out_data, int *valid_data_len)
+int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_t *out_data, int *valid_data_len)
 {
+	// apply frequency offset for preambles and "SIGNAL" symbol.
+	int MAX_SIGNAL_FIELD_POS = 320;
+	for(int i=0; i<MAX_SIGNAL_FIELD_POS; i++)
+		s[i] *= cordic(i*frequency_offset);
+
 	int l = gettime();
 	*valid_data_len = 0;
 
@@ -497,12 +507,11 @@ int frame_decoding(complex * s, int sample_count, uint8_t *out_data, int *valid_
 
 	// OFDM symbol alignment
 	// use long training sequence to find first symbol
-	f =fopen("alignment.csv", "wb");
-	fprintf(f, "N,P,A\n");
+	//f =fopen("alignment.csv", "wb");
+	//fprintf(f, "N,P,A\n");
 	float autocorrection_value[3] = {0};
 	int autocorrection_pos[3] = {0};
-	for(int n=0; n<360+50; n++)			// 160: number of sample of short training sequence
-		// 320: number of sample of long training sequence
+	for(int n=0; n<MAX_SIGNAL_FIELD_POS-64; n++)		// 320: number of sample of long training sequence
 	{
 		complex a;
 		float p = 0;
@@ -512,10 +521,10 @@ int frame_decoding(complex * s, int sample_count, uint8_t *out_data, int *valid_
 			p += s[n+k].sq_magnitude();//(s[preamble_start+n+k] * s[preamble_start+n+k].conjugate()).real;
 		}
 
-		p = max(max(p, s[n+64].magnitude()), s[n].magnitude());
+// 		p = max(max(p, s[n+64].magnitude()), s[n].magnitude());
 
 		float autocorelation = a.magnitude()/p;
-		fprintf(f, "%d,%f,%f\n", n, autocorelation, s[n].magnitude());
+// 		fprintf(f, "%d,%f,%f\n", n, autocorelation, s[n].magnitude());
 
 		for(int i=0; i<3; i++)
 		{
@@ -539,24 +548,31 @@ int frame_decoding(complex * s, int sample_count, uint8_t *out_data, int *valid_
 	for(int i=0; i<3; i++)
 		if (autocorrection_pos[i] > peak_pos)
 			peak_pos = autocorrection_pos[i];
-	fclose(f);
+	//fclose(f);
 
 	printf("long training sequence @ %d of preamble\n", peak_pos);
 	int symbol_start = peak_pos + 64;
 	printf("symbols start @ %d (%.1fus)\n", symbol_start, symbol_start/20.0f);
 
 	// fine frequency offset
-	complex _df;
-	for(int i=0; i<64; i++)
-	{
-		complex _f = s[symbol_start-64+i] * s[symbol_start-128+i].conjugate();
-		_df += _f;
-
-	}
-
-	float df = _df.argument()/64;
-
-	printf("fine frequency offset:%f degree / sample (%f Mhz)\n", df * 180 / PI, 20 / (2 * PI / df) );
+// 	complex _df;
+// 	float ff[64];
+// 	for(int i=0; i<64; i++)
+// 	{
+// 		complex _f = s[symbol_start-64+i] * s[symbol_start-128+i].conjugate();
+// 		_df += _f;
+// 		
+// 		ff[i] = _f.argument();
+// 		printf("%f\n", _f.argument());
+// 	}
+// 
+// 	float ff_k;
+// 	float ff_b;
+// 	line_fitting_y(ff, 63, &ff_k, &ff_b);
+// 
+// 	float df = _df.argument()/64;
+// 
+// 	printf("fine frequency offset:%f degree / sample (%f Mhz)\n", df * 180 / PI, 20 / (2 * PI / df) );
 
 
 	// initial phase and amplitude equalization
@@ -589,9 +605,9 @@ int frame_decoding(complex * s, int sample_count, uint8_t *out_data, int *valid_
 	// if this symbol fails to decode, we drop the whole frame
 	complex signal_fft[64];
 	fft_complex(&s[symbol_start+16], signal_fft);
-	ALIGN uint8_t signal_bits[64] = {0};
-	ALIGN uint8_t signal_bits_deinterleaved[64] = {0};
-	ALIGN uint8_t signal_decoded_bits[64];
+	ALIGN uint8_t signal_bits[640] = {0};
+	ALIGN uint8_t signal_bits_deinterleaved[640] = {0};
+	ALIGN uint8_t signal_decoded_bits[640];
 	int signal_pos = 0;
 	printf("signal bits:\n");
 	for(int i=-26; i<=26; i++)
@@ -674,6 +690,11 @@ int frame_decoding(complex * s, int sample_count, uint8_t *out_data, int *valid_
 		return sample_count;
 	}
 
+	// apply frequency offset for data symbols
+// 	fprintf(stderr, "i<%d, cc=%d\n", symbol_start + symbol_count * 80, cc);
+	for(int n=MAX_SIGNAL_FIELD_POS; n<symbol_start + symbol_count * 80; n++)
+		s[n] *= cordic(n*frequency_offset);
+
 
 	// fft all symbols
 	complex symbols[200][64];
@@ -683,12 +704,12 @@ int frame_decoding(complex * s, int sample_count, uint8_t *out_data, int *valid_
 		fft_complex(s+symbol_start+i*80+16, symbols[i]);
 
 		// equalizing
-		float phase_offset_per_symbol = -df * 80;
-		float phase_offset = (i+1)*phase_offset_per_symbol;
+// 		float phase_offset_per_symbol = -df * 80;
+// 		float phase_offset = (i+1)*phase_offset_per_symbol;
 // 		complex offset(cos(phase_offset), sin(phase_offset));
 // 		complex offset2 = cordic(phase_offset);
 		for(int j=0; j<64; j++)
-			symbols[i][j] = symbols[i][j] * h[j] * cordic(phase_offset);//offset;
+			symbols[i][j] = symbols[i][j] * h[j];// * cordic(phase_offset);//offset;
 	}
 
 
@@ -766,25 +787,25 @@ int frame_decoding(complex * s, int sample_count, uint8_t *out_data, int *valid_
 	ALIGN uint8_t service_and_data_decoded_bits[8192*8];
 	int pos = 0;
 
-	FILE * constellation = fopen("constellation.csv", "wb");
-	fprintf(f, "N,P,A\n");
-	for(int i=1; i<symbol_count; i++)
-	{
-		for(int j=-26; j<=26; j++)
-		{
-			if (j == 0)
-				continue;
-
-			int n = j>0?j:j+64;
-			if ((n==7||n==21||n==-7||n==-21||n==64-7||n==64-21))
-				continue;
-
-			complex v = symbols[i][n];
-
-			fprintf(constellation, "%d,%f,%f,%f\n", i, v.real, v.image, v.argument());
-		}
-	}
-	fclose(constellation);
+// 	FILE * constellation = fopen("constellation.csv", "wb");
+// 	fprintf(constellation, "N,P,A\n");
+// 	for(int i=1; i<symbol_count; i++)
+// 	{
+// 		for(int j=-26; j<=26; j++)
+// 		{
+// 			if (j == 0)
+// 				continue;
+// 
+// 			int n = j>0?j:j+64;
+// 			if ((n==7||n==21||n==-7||n==-21||n==64-7||n==64-21))
+// 				continue;
+// 
+// 			complex v = symbols[i][n];
+// 
+// 			fprintf(constellation, "%d,%f,%f,%f\n", i, v.real, v.image, v.argument());
+// 		}
+// 	}
+// 	fclose(constellation);
 
 	mapper demapper = modulation2demapper(mod);
 	int * pattern = modulation2inerleaver_pattern(mod);
@@ -847,132 +868,6 @@ int frame_decoding(complex * s, int sample_count, uint8_t *out_data, int *valid_
 
 	printf("%dms\n", gettime()-l);
 	return symbol_start + symbol_count * 80;
-}
-
-// detect short preambles and feed packet decoder.
-int slice_and_decode(int16_t *s, int sample_count, uint8_t *out_data, int *valid_data_len)
-{
-	FILE * f =fopen("ShortTraining.csv", "wb");
-	fprintf(f, "N,P,A\n");
-
-	int Nwindow = 48;
-
-	float df_avg = 0;
-	int avg_count = 0;
-
-	bool preamble_found = false;
-	float autocorrelation_throthold = 0.80;
-	int preamble_start = 0;
-
-	for(int n=0; n<sample_count-64; n++)
-	{
-		int64_t a[2] = {0};			// autocorrelation, [i,q]
-		int64_t p = 0;				// amplitude normalizer
-		int64_t _f[2] = {0};		// frequency offset, [i,q]
-
-
-		for(int k=0; k<Nwindow; k++)
-		{
-			a[0] += s[(n+k)*2+1] * s[(n+k+16)*2+1] - s[(n+k)*2+0] * -s[(n+k+16)*2+0];
-			a[1] += s[(n+k)*2+1] * -s[(n+k+16)*2+0] + s[(n+k)*2+0] * s[(n+k+16)*2+1];
-
-			p += s[(n+k)*2+0] * s[(n+k)*2+0] + s[(n+k)*2+1] * s[(n+k)*2+1];
-
-			//a += s[n+k] * s[n+k+16].conjugate();
-			//p += s[n+k].sq_magnitude();
-		}
-
-		for(int k=0; k<16; k++)
-		{
-			//_f += s[n+k+Nwindow+16] * s[n+k+16+Nwindow+16].conjugate();	// note:latency ~= Nwindow+16
-
-			_f[0] += s[(n+k+Nwindow+16)*2+1] * s[(n+k+Nwindow+32)*2+1] - s[(n+k+Nwindow+16)*2+0] * -s[(n+k+Nwindow+32)*2+0];
-			_f[1] += s[(n+k+Nwindow+16)*2+1] * -s[(n+k+Nwindow+32)*2+0] + s[(n+k+Nwindow+16)*2+0] * s[(n+k+Nwindow+32)*2+1];
-		}
-
-		p = max(p, Nwindow*20);	// reject false positive in weak signal
-
-		float autocorrelation = sqrt((float)a[0]*a[0]+a[1]*a[1]) / p;
-		float df = atan2((double)_f[1], (double)_f[0])/16.0f;		// - _f.argument();
-
-// 		fprintf(f, "%f,%f,%.0f\n", float(n), autocorrelation*1000, sqrt((float)s[(n+Nwindow+16)*2] * s[(n+Nwindow+16)*2] + s[(n+Nwindow+16)*2+1] + s[(n+Nwindow+16)*2+1]));
-
-		if (autocorrelation > autocorrelation_throthold && !preamble_found)
-		{
-			df_avg += df;
-			avg_count ++;
-
-			int q = _f[1] / 65536;
-
-			if (preamble_start == 0)
-				preamble_start = n+Nwindow+16;		// note:latency ~= Nwindow+16
-		}
-		else if (avg_count > 3 && autocorrelation < autocorrelation_throthold)
-		{
-			preamble_found = true;
-		}
-		else
-		{
-			preamble_found = false;
-		}
-
-		if (avg_count > 63)
-		{
-			preamble_found = true;
-			break;
-		}
-	}
-
-	df_avg /= avg_count;
-
-	if (preamble_found)
-	{
-		printf("found short training sequence @ %d sample(%fus), avg_count=%d.\n"
-			"coarse frequency offset:%f degree / sample (%f Mhz)\n", preamble_start, preamble_start/20.0f, avg_count, df_avg * 180 / PI, 20 / (2 * PI / df_avg) );
-	}
-	else
-	{
-		printf("preamble not found.\n");
-		return sample_count;
-	}
-	fclose(f);
-
-
-	// copy to complex and apply coarse frequency offset;
-	complex pkt[MAX_SYMBOLS_PER_SAMPLE*80+320];
-	int pkt_size = min(MAX_SYMBOLS_PER_SAMPLE*80, sample_count-preamble_start);
-	for(int n=0; n<pkt_size; n++)
-	{
-		// s2[n] = s[n] * e^(i*n*df)
-		//complex offset(cos(n*df_avg), sin(n*df_avg));
-		pkt[n] = complex(s[(n+preamble_start)*2+1], s[(n+preamble_start)*2+0]);	// note: reverse IQ
-		pkt[n] *= cordic((n)*df_avg);//offset;
-	}
-
-// 	FILE * comp = fopen("comp_8bit.pcm", "wb");
-// 	for(int i=0; i<pkt_size; i++)
-// 	{
-// 		int8_t I = pkt[i].real/256;
-// 		int8_t Q = pkt[i].image/256;
-// 		fwrite(&Q, 1, 1, comp);
-// 		fwrite(&I, 1, 1, comp);
-// 	}
-// 	fclose(comp);
-
-
-	int pkt_result = frame_decoding(pkt, pkt_size, out_data, valid_data_len);
-
-	if (pkt_result < 0)
-		return 320;
-
-	return pkt_result + preamble_start;
-}
-
-
-float randf()
-{
-	int32_t v = ((rand()&0xff) << 24) | ((rand()&0xff) << 16) | ((rand()&0xff) << 8) | ((rand()&0xff) << 0);
-	return v/2147483648.0f;
 }
 
 int tx(uint8_t *psdu, int count, complex **out, int mbps = 6)
@@ -1152,6 +1047,181 @@ int tx(uint8_t *psdu, int count, complex **out, int mbps = 6)
 }
 
 
+// abj = a * b.conjugate()
+// amp = |a|^2, no image part.
+// count: number of int16_t, not number of complex number
+int complex16_abj_amp(int16_t *a, int16_t *b, int16_t *abj, int16_t *amp, int count)
+{
+	__m128i mff = _mm_set1_epi16(0xff);
+	__m128i m_min = _mm_set1_epi16(0);
+
+	for(int i=0; i<count; i+=16)
+	{
+		__m128i * pa = (__m128i*)(a+i);
+		__m128i * pb = (__m128i*)(b+i);
+		__m128i * pout = (__m128i*)(abj+i);
+
+		__m128i ma1 = _mm_loadu_si128(pa);
+		__m128i ma2 = _mm_loadu_si128(pa+1);
+		__m128i mb1 = _mm_loadu_si128(pb);
+		__m128i mb2 = _mm_loadu_si128(pb+1);
+		ma1 = _mm_srai_epi16(ma1, 8);
+		ma2 = _mm_srai_epi16(ma2, 8);
+		mb1 = _mm_srai_epi16(mb1, 8);
+		mb2 = _mm_srai_epi16(mb2, 8);
+
+		__m128i tmp1 = _mm_mullo_epi16(ma1, ma1);
+		__m128i tmp2 = _mm_mullo_epi16(ma2, ma2);		// RaRa IaIa ...
+		tmp2 = _mm_hadd_epi16(tmp1, tmp2);				// RaRa+IaIa ...
+		tmp2 = _mm_max_epi16(m_min, tmp2);				// at least 20*20
+		_mm_storeu_si128((__m128i*)(amp+i/2), tmp2);
+
+		tmp1 = _mm_mullo_epi16(ma1, mb1);
+		tmp2 = _mm_mullo_epi16(ma2, mb2);				// RaRb IaIb ...
+
+		__m128i mreal = _mm_hadd_epi16(tmp1, tmp2);		// RaRb+IaIb ...
+
+		tmp1 = _mm_srli_epi32(ma1, 16);
+		ma1 = _mm_slli_epi32(ma1, 16);
+		ma1 = _mm_xor_si128(ma1, tmp1);
+
+		tmp1 = _mm_srli_epi32(ma2, 16);
+		ma2 = _mm_slli_epi32(ma2, 16);
+		ma2 = _mm_xor_si128(ma2, tmp1);					// swap real and image of a, -->> Ia Ra ...
+
+		tmp1 = _mm_mullo_epi16(ma1, mb1);
+		tmp2 = _mm_mullo_epi16(ma2, mb2);				// IaRb RaIb ...
+		__m128i mimage = _mm_hsub_epi16(tmp1, tmp2);	// IaRb-RaIb ...
+
+		tmp1 = _mm_unpacklo_epi16(mreal, mimage);
+		tmp2 = _mm_unpackhi_epi16(mreal, mimage);		// interleave
+
+		_mm_storeu_si128(pout, tmp1);
+		_mm_storeu_si128(pout+1, tmp2);
+	}
+
+	return count;
+}
+
+
+int16_t queue[256*1024 + MAX_SYMBOLS_PER_SAMPLE * 80*2 + 500] = {0};
+int16_t a[256*1024 + MAX_SYMBOLS_PER_SAMPLE * 80*2 + 500] = {0};
+int16_t p[128*1024 + MAX_SYMBOLS_PER_SAMPLE * 80*2 + 500] = {0};
+int queue_count = 0;
+
+int slice(int16_t *new_data, int count, bool flush = false)
+{
+	// overflow check
+	if (count > 256*1024)
+		return -1;
+
+	// now padding is enough
+	if (new_data && count)
+	{
+		memcpy(queue+queue_count, new_data, count*2);		
+		queue_count += count;
+	}
+
+	// SIMD complex multiply / amplitude
+	complex16_abj_amp(queue, queue+32, a, p, queue_count-32);
+
+	static FILE * f = fopen("Z:\\auto.pcm", "wb");
+	int Nwindow = 48;
+
+	int moving_avg_a[2] = {0};
+	int moving_avg_p = 0;
+	for(int i=0; i<Nwindow; i++)
+	{
+		moving_avg_p += p[i];
+		moving_avg_a[0] += a[i*2];
+		moving_avg_a[1] += a[i*2+1];
+	}
+
+	int counter = 0;
+
+	static FILE * fout = fopen("data.pkt", "wb");
+	for(int i=Nwindow; i<(flush?(queue_count+MAX_SYMBOLS_PER_SAMPLE * 80*2 + 500):queue_count)/2-MAX_SYMBOLS_PER_SAMPLE*80; i++)
+	{
+		int auto_denum = (moving_avg_p/100*moving_avg_p/640);
+		if (auto_denum > 0)
+		{
+			int auto10000 = (moving_avg_a[0]/64*moving_avg_a[0]+moving_avg_a[1]/64*moving_avg_a[1]) / auto_denum;
+			static int threshold = (0.8*0.8)*1000;
+
+			if (auto10000 > threshold)
+				counter ++;
+			else
+				counter = 0;
+
+			if (counter == 64)
+			{
+				int complex_offset[2] = {moving_avg_a[0], moving_avg_a[1]};
+				for(int j=0; j<80; j++)
+				{
+					complex_offset[0] += a[(i+j)*2+0];
+					complex_offset[1] += a[(i+j)*2+1];
+				}
+
+				float offset = atan2((double)complex_offset[1], (double)complex_offset[0])/16;
+
+				// copy to complex and apply coarse frequency offset;
+				complex pkt[MAX_SYMBOLS_PER_SAMPLE*80];
+				int pkt_size = MAX_SYMBOLS_PER_SAMPLE*80;
+				for(int n=0; n<pkt_size; n++)
+				{
+					pkt[n].real = queue[(i+n)*2+1];
+					pkt[n].image = queue[(i+n)*2];	// note: reverse IQ
+				}
+
+				int valid_data_len;
+				uint8_t out_data[4096];
+
+				int pkt_result = frame_decoding(pkt, pkt_size, -offset, out_data, &valid_data_len);
+				
+
+				static int pkt_count = 0;
+				static int valid_pkt_count = 0;
+				pkt_count++;
+				if (valid_data_len > 0)
+				{
+					fwrite(&valid_data_len, 1, 4, fout);
+					fwrite(out_data, 1, valid_data_len, fout);
+
+					valid_pkt_count++;
+				}
+
+				fprintf(stderr, "\r%d/%d pkt", valid_pkt_count, pkt_count);
+
+
+			}
+
+		}
+
+		moving_avg_p -= p[i-Nwindow];
+		moving_avg_a[0] -= a[(i-Nwindow)*2];
+		moving_avg_a[1] -= a[(i-Nwindow)*2+1];
+
+		moving_avg_p += p[i];
+		moving_avg_a[0] += a[i*2];
+		moving_avg_a[1] += a[i*2+1];
+	}
+
+	if (flush)
+		fflush(fout);
+
+	if (queue_count > (MAX_SYMBOLS_PER_SAMPLE*80)*2)
+	{
+		int dn = queue_count-MAX_SYMBOLS_PER_SAMPLE*80*2;
+
+		memmove(queue, queue+dn, MAX_SYMBOLS_PER_SAMPLE*80*4);
+
+		assert(queue_count-dn == MAX_SYMBOLS_PER_SAMPLE*80*2);
+		queue_count = MAX_SYMBOLS_PER_SAMPLE*80*2;
+	}
+
+	return count;
+}
+
 int main()
 {
 	init_training_sequence();
@@ -1181,7 +1251,7 @@ int main()
 	delete [] s_gen;
 
 	fprintf(stderr, "reading....");
-	char file[] = "testcases\\wifi_12mbps_1frame_8bit.pcm";
+	char file[] = "testcases/wifi_12mbps_1frame_8bit.pcm";
 	bool _8bit = strstr(file, "8bit");
 	FILE * f = fopen(file, "rb");
 	if (!f)
@@ -1209,42 +1279,21 @@ int main()
 		sample_count = file_size/2;
 		data = new int16_t[sample_count*2];
 		for(int i=0; i<sample_count*2; i++)
-			data[i] = data8[i];
+			data[i] = data8[i]*256;
 		delete [] data8;
 	}
 	fclose(f);
-
 	fprintf(stderr, "done %d samples\n", sample_count);
-	int l = gettime();
 
-	f = fopen("data.pkt", "wb");
-
-	int pos = 0;
-	int kk = 0;
-	uint8_t data_out[8192];
-	int valid_size = 0;
-	int valid_count = 0;
-	while(sample_count > pos)
+	int left = sample_count*2;
+	int16_t *_p = data;
+	while(left>0)
 	{
-		int c = slice_and_decode(data+pos*2, sample_count-pos, data_out, &valid_size);
-		pos += c;
-		if (valid_size)
-			valid_count ++ ;
-
-		fprintf(stderr, "\r%d/%d ", valid_count, kk++);
-
-		if (valid_size)
-		{
-			fwrite(&valid_size, 1, 4, f);
-			fwrite(data_out, 1, valid_size, f);
-		}
+		int block = slice(_p, min(256*1024, left));
+		left -= block;
+		_p+=block;
 	}
-
-	fclose(f);
-
-	l = gettime() - l;
-
-	printf("total:%d\n", l);
+	slice(NULL, 0, true);
 
 	return 0;
 }
