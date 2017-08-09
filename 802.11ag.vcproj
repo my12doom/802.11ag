@@ -205,6 +205,10 @@
 				RelativePath=".\mapper.h"
 				>
 			</File>
+			<File
+				RelativePath=".\sse_mathfun.h"
+				>
+			</File>
 		</Filter>
 		<Filter
 			Name="Í·ÎÄ¼þ"
