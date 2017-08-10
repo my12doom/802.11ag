@@ -28,7 +28,7 @@ using namespace gr::ieee802_11;
 #define countof(x) (sizeof(x)/sizeof(x[0]))
 
 const int CORDIC_TBL_COUNT = 100000;
-const int MAX_SYMBOLS_PER_SAMPLE = 20;
+const int MAX_SYMBOLS_PER_SAMPLE = 200;
 complex cordic_tbl[CORDIC_TBL_COUNT];
 int16_t cordic_tbl16[CORDIC_TBL_COUNT*2];
 int interleave_pattern[4][288];	// [BPSK, QPSK, 16QAM, 64QAM] [max: 6*48bits]
@@ -112,6 +112,171 @@ float correalation(float *s1, float *s2, int count)
 
 
 	return *(float*)&sum_a0;
+}
+
+
+// abj = a * b.conjugate()
+// amp = |a|^2, no image part.
+// count: number of int16_t, not number of complex number
+int complex16_abj_amp(int16_t *a, int16_t *b, int16_t *abj, int16_t *amp, int count)
+{
+	__m128i mff = _mm_set1_epi16(0xff);
+	__m128i m_min = _mm_set1_epi16(0);
+
+	for(int i=0; i<count; i+=16)
+	{
+		__m128i * pa = (__m128i*)(a+i);
+		__m128i * pb = (__m128i*)(b+i);
+		__m128i * pout = (__m128i*)(abj+i);
+
+		__m128i ma1 = _mm_loadu_si128(pa);
+		__m128i ma2 = _mm_loadu_si128(pa+1);
+		__m128i mb1 = _mm_loadu_si128(pb);
+		__m128i mb2 = _mm_loadu_si128(pb+1);
+		ma1 = _mm_srai_epi16(ma1, 8);
+		ma2 = _mm_srai_epi16(ma2, 8);
+		mb1 = _mm_srai_epi16(mb1, 8);
+		mb2 = _mm_srai_epi16(mb2, 8);
+
+		__m128i tmp1 = _mm_mullo_epi16(ma1, ma1);
+		__m128i tmp2 = _mm_mullo_epi16(ma2, ma2);		// RaRa IaIa ...
+		tmp2 = _mm_hadd_epi16(tmp1, tmp2);				// RaRa+IaIa ...
+		tmp2 = _mm_max_epi16(m_min, tmp2);				// at least 20*20
+		_mm_storeu_si128((__m128i*)(amp+i/2), tmp2);
+
+		tmp1 = _mm_mullo_epi16(ma1, mb1);
+		tmp2 = _mm_mullo_epi16(ma2, mb2);				// RaRb IaIb ...
+
+		__m128i mreal = _mm_hadd_epi16(tmp1, tmp2);		// RaRb+IaIb ...
+
+		tmp1 = _mm_srli_epi32(ma1, 16);
+		ma1 = _mm_slli_epi32(ma1, 16);
+		ma1 = _mm_xor_si128(ma1, tmp1);
+
+		tmp1 = _mm_srli_epi32(ma2, 16);
+		ma2 = _mm_slli_epi32(ma2, 16);
+		ma2 = _mm_xor_si128(ma2, tmp1);					// swap real and image of a, -->> Ia Ra ...
+
+		tmp1 = _mm_mullo_epi16(ma1, mb1);
+		tmp2 = _mm_mullo_epi16(ma2, mb2);				// IaRb RaIb ...
+		__m128i mimage = _mm_hsub_epi16(tmp1, tmp2);	// IaRb-RaIb ...
+
+		tmp1 = _mm_unpacklo_epi16(mreal, mimage);
+		tmp2 = _mm_unpackhi_epi16(mreal, mimage);		// interleave
+
+		_mm_storeu_si128(pout, tmp1);
+		_mm_storeu_si128(pout+1, tmp2);
+	}
+
+	return count;
+}
+
+int complex16_frequency_offset(int16_t *samples, int16_t *out, int count, float offset)
+{
+	for(int i=0; i<count; i+=16)
+	{
+		__m128 f1 = _mm_set_ps(i/2+0, i/2+1, i/2+2, i/2+3);
+		__m128 f2 = _mm_set1_ps(4);
+		__m128 fre = _mm_set1_ps(offset);
+		f2 = _mm_add_ps(f1, f2);
+		f1 = _mm_mul_ps(f1, fre);
+		f2 = _mm_mul_ps(f2, fre);
+		__m128 s1,s2,c1,c2;
+		sincos_ps(f1, &s1, &c1);
+		sincos_ps(f2, &s2, &c2);
+		f1 = _mm_set1_ps(32767);
+		s1 = _mm_mul_ps(f1, s1);
+		s2 = _mm_mul_ps(f1, s2);
+		c1 = _mm_mul_ps(f1, c1);
+		c2= _mm_mul_ps(f1, c2);
+
+		__m128i s1i = _mm_cvtps_epi32(s1);
+		__m128i s2i = _mm_cvtps_epi32(s2);
+		__m128i c1i = _mm_cvtps_epi32(c1);
+		__m128i c2i = _mm_cvtps_epi32(c2);
+
+		s1i = _mm_packs_epi32(s1i, s2i);
+		c1i = _mm_packs_epi32(c1i, c2i);
+
+
+		__m128i mb1 = _mm_unpacklo_epi16(c1i, s1i);
+		__m128i mb2 = _mm_unpackhi_epi16(c1i, s1i);
+
+
+		__m128i ma1 = _mm_loadu_si128((__m128i*)(samples+i));
+		__m128i ma2 = _mm_loadu_si128((__m128i*)(samples+i+8));
+
+		__m128i tmp1 = _mm_mulhi_epi16(ma1, mb1);
+		__m128i tmp2 = _mm_mulhi_epi16(ma2, mb2);			// RaRb IaIb ...
+
+		__m128i mreal = _mm_hsub_epi16(tmp1, tmp2);			// RaRb-IaIb ...
+
+		tmp1 = _mm_srli_epi32(ma1, 16);
+		ma1 = _mm_slli_epi32(ma1, 16);
+		ma1 = _mm_xor_si128(ma1, tmp1);
+
+		tmp1 = _mm_srli_epi32(ma2, 16);
+		ma2 = _mm_slli_epi32(ma2, 16);
+		ma2 = _mm_xor_si128(ma2, tmp1);					// swap real and image of a, -->> Ia Ra ...
+
+		tmp1 = _mm_mulhi_epi16(ma1, mb1);
+		tmp2 = _mm_mulhi_epi16(ma2, mb2);				// IaRb RaIb ...
+		__m128i mimage = _mm_hadd_epi16(tmp1, tmp2);	// IaRb+RaIb ...
+
+		tmp1 = _mm_unpacklo_epi16(mreal, mimage);
+		tmp2 = _mm_unpackhi_epi16(mreal, mimage);		// interleave
+
+		_mm_storeu_si128((__m128i*)(out+i), tmp1);
+		_mm_storeu_si128((__m128i*)(out+i+8), tmp2);
+	}
+
+	return 0;
+}
+
+
+int complex_frequency_offset(complex *samples, int count, float offset, float phase = 0, complex *out = NULL)
+{
+	if (out == NULL)
+		out = samples;
+
+	__m128 mphase = _mm_set1_ps(phase);
+	__m128 fre = _mm_set1_ps(offset);
+
+	for(int i=0; i<count; i+=4)
+	{
+		__m128 f1 = _mm_set_ps(i+3, i+2, i+1, i+0);
+		f1 = _mm_mul_ps(f1, fre);
+		f1 = _mm_add_ps(f1, mphase);
+		__m128 s1,c1;
+		sincos_ps(f1, &s1, &c1);
+
+		__m128 mb1 = _mm_unpacklo_ps(c1, s1);
+		__m128 mb2 = _mm_unpackhi_ps(c1, s1);
+
+		__m128 ma1 = _mm_loadu_ps((float*)(samples+i));
+		__m128 ma2 = _mm_loadu_ps((float*)(samples+i+2));
+
+		__m128 tmp1 = _mm_mul_ps(ma1, mb1);
+		__m128 tmp2 = _mm_mul_ps(ma2, mb2);			// RaRb IaIb ...
+
+		__m128 mreal = _mm_hsub_ps(tmp1, tmp2);		// RaRb-IaIb ...
+
+
+		mb1 = _mm_unpacklo_ps(s1, c1);
+		mb2 = _mm_unpackhi_ps(s1, c1);
+
+		tmp1 = _mm_mul_ps(ma1, mb1);
+		tmp2 = _mm_mul_ps(ma2, mb2);				// RaIb IaRb ...
+		__m128 mimage = _mm_hadd_ps(tmp1, tmp2);	// RaIb+IaRb ...
+
+		tmp1 = _mm_unpacklo_ps(mreal, mimage);
+		tmp2 = _mm_unpackhi_ps(mreal, mimage);		// interleave
+
+		_mm_storeu_ps((float*)(out+i), tmp1);
+		_mm_storeu_ps((float*)(out+i+2), tmp2);
+	}
+
+	return 0;
 }
 
 int init_interleaver_pattern()
@@ -550,51 +715,37 @@ int test_convolutional_code()
 
 int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_t *out_data, int *valid_data_len)
 {
-	// apply frequency offset for preambles and "SIGNAL" symbol.
- 	int MAX_SIGNAL_FIELD_POS = 320;
-// 	for(int i=0; i<MAX_SIGNAL_FIELD_POS; i++)
-// 		s[i] *= cordic(i*frequency_offset);
-
 	int l = gettime();
 	*valid_data_len = 0;
-
 	FILE * f;
+
+	// apply frequency offset for preambles and "SIGNAL" symbol.
+ 	int MAX_SIGNAL_FIELD_POS = 160+160+80;
+	complex_frequency_offset(s, MAX_SIGNAL_FIELD_POS, frequency_offset);
 
 	// OFDM symbol alignment
 	// use long training sequence to find first symbol
 // 	f =fopen("alignment.csv", "wb");
 	//fprintf(f, "N,P,A\n");
-	float autocorrection_value[3] = {0};
-	int autocorrection_pos[3] = {0};
-	for(int n=0; n<MAX_SIGNAL_FIELD_POS-64; n++)		// 320: number of sample of long training sequence
+	float correction_value[3] = {0};
+	int correction_pos[3] = {0};
+	for(int n=0; n<MAX_SIGNAL_FIELD_POS-80-64; n++)
 	{
-// 		complex a;
-// 		float p = 0;
-// 		for(int k=0; k<64; k++)
-// 		{
-// 			a += s[n+k] * LT_time_space[k].conjugate();
-// 			p += s[n+k].sq_magnitude();//(s[preamble_start+n+k] * s[preamble_start+n+k].conjugate()).real;
-// 		}
-// 
-// // 		p = max(max(p, s[n+64].magnitude()), s[n].magnitude());
-// 
-// 		float autocorelation = a.magnitude()/p;
-
-		float autocorelation = correalation((float*)&s[n], (float*)LT_time_space, 128);
+		float corelation = correalation((float*)&s[n], (float*)LT_time_space, 128);
 
 // 		fprintf(f, "%d,%f,%f\n", n, autocorelation, s[n].magnitude());
 		for(int i=0; i<3; i++)
 		{
-			if (autocorelation > autocorrection_value[i])
+			if (corelation > correction_value[i])
 			{
 				for(int j=i+1; j<3; j++)
 				{
-					autocorrection_value[j] = autocorrection_value[j-1];
-					autocorrection_pos[j] = autocorrection_pos[j-1];
+					correction_value[j] = correction_value[j-1];
+					correction_pos[j] = correction_pos[j-1];
 				}
 
-				autocorrection_value[i] = autocorelation;
-				autocorrection_pos[i] = n;
+				correction_value[i] = corelation;
+				correction_pos[i] = n;
 
 				break;
 			}
@@ -603,8 +754,8 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 
 	int peak_pos = 0;
 	for(int i=0; i<3; i++)
-		if (autocorrection_pos[i] > peak_pos)
-			peak_pos = autocorrection_pos[i];
+		if (correction_pos[i] > peak_pos)
+			peak_pos = correction_pos[i];
 // 	fclose(f);
 
 	printf("long training sequence @ %d of preamble\n", peak_pos);
@@ -658,7 +809,7 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 	}
 
 
-	// "SIGNAL" symbol, BPSK, 1/2 convolutional coded
+	// decode "SIGNAL" symbol, BPSK, 1/2 convolutional coded
 	// if this symbol fails to decode, we drop the whole frame
 	static complex signal_fft[64];
 	fft_complex(&s[symbol_start+16], signal_fft);
@@ -685,9 +836,8 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 		signal_bits_deinterleaved[i] = signal_bits[interleave_pattern[0][i]];
 
 	printf("\ndecoded:\n");
-	viterbi_decoder *dec = new viterbi_decoder;
-	dec->decode(signal_bits_deinterleaved, signal_decoded_bits, 48);
-	delete dec;
+	viterbi_decoder dec;
+	dec.decode(signal_bits_deinterleaved, signal_decoded_bits, 48);
 	for(int i=0; i<24; i++)
 	{
 		if (i % 8 == 0 && i > 0)
@@ -748,12 +898,11 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 	}
 
 	// apply frequency offset for data symbols
-// 	fprintf(stderr, "i<%d, cc=%d\n", symbol_start + symbol_count * 80, cc);
-// 	for(int n=MAX_SIGNAL_FIELD_POS; n<symbol_start + symbol_count * 80; n++)
-// 		s[n] *= cordic(n*frequency_offset);
+	complex_frequency_offset(s+MAX_SIGNAL_FIELD_POS,
+		symbol_start + symbol_count * 80-MAX_SIGNAL_FIELD_POS, frequency_offset, MAX_SIGNAL_FIELD_POS*frequency_offset);
 
 
-	// fft all symbols
+	// fft and qualize all symbols
 	static complex symbols[200][64];
 
 	for(int i=0; i<symbol_count; i++)
@@ -761,12 +910,8 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 		fft_complex(s+symbol_start+i*80+16, symbols[i]);
 
 		// equalizing
-// 		float phase_offset_per_symbol = -df * 80;
-// 		float phase_offset = (i+1)*phase_offset_per_symbol;
-// 		complex offset(cos(phase_offset), sin(phase_offset));
-// 		complex offset2 = cordic(phase_offset);
 		for(int j=0; j<64; j++)
-			symbols[i][j] = symbols[i][j] * h[j];// * cordic(phase_offset);//offset;
+			symbols[i][j] = symbols[i][j] * h[j];
 	}
 
 
@@ -838,7 +983,7 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 		}
 	}
 
-	// now the data symbols
+	// now decode the data symbols
 	ALIGN uint8_t service_and_data_bits[8192*8] = {0};
 	ALIGN uint8_t service_and_data_deinterleaved_bits[8192*8] = {0};
 	ALIGN uint8_t service_and_data_decoded_bits[8192*8];
@@ -881,13 +1026,6 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 			p2[j] = p[pattern[j]];
 	}
 
-// 	for(int i=0; i<bits_per_symbol*data_symbol_count; i++)
-// 	{
-// 		printf("%d", service_and_data_deinterleaved_bits[i]);
-// 	}
-
-
-// 	memset(&dec, 0, sizeof(dec));
 	printf("sample_count = %d\n", sample_count);
 	fflush(stdout);
 	int bits_count = depuncture(service_and_data_deinterleaved_bits, bits_per_symbol*data_symbol_count, pun);
@@ -898,8 +1036,7 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 		ntraceback = 9;
 	if (pun == _3_4)
 		ntraceback = 10;
-	viterbi_decoder dec2;
-	dec2.decode(service_and_data_deinterleaved_bits, service_and_data_decoded_bits, bits_count+16, ntraceback);
+	dec.decode(service_and_data_deinterleaved_bits, service_and_data_decoded_bits, bits_count+16, ntraceback);
 	uint8_t out_bytes[8192];
 	descramble(service_and_data_decoded_bits, out_bytes, data_bit_per_symbol*data_symbol_count);
 
@@ -1105,123 +1242,6 @@ int tx(uint8_t *psdu, int count, complex **out, int mbps = 6)
 }
 
 
-// abj = a * b.conjugate()
-// amp = |a|^2, no image part.
-// count: number of int16_t, not number of complex number
-int complex16_abj_amp(int16_t *a, int16_t *b, int16_t *abj, int16_t *amp, int count)
-{
-	__m128i mff = _mm_set1_epi16(0xff);
-	__m128i m_min = _mm_set1_epi16(0);
-
-	for(int i=0; i<count; i+=16)
-	{
-		__m128i * pa = (__m128i*)(a+i);
-		__m128i * pb = (__m128i*)(b+i);
-		__m128i * pout = (__m128i*)(abj+i);
-
-		__m128i ma1 = _mm_loadu_si128(pa);
-		__m128i ma2 = _mm_loadu_si128(pa+1);
-		__m128i mb1 = _mm_loadu_si128(pb);
-		__m128i mb2 = _mm_loadu_si128(pb+1);
-		ma1 = _mm_srai_epi16(ma1, 8);
-		ma2 = _mm_srai_epi16(ma2, 8);
-		mb1 = _mm_srai_epi16(mb1, 8);
-		mb2 = _mm_srai_epi16(mb2, 8);
-
-		__m128i tmp1 = _mm_mullo_epi16(ma1, ma1);
-		__m128i tmp2 = _mm_mullo_epi16(ma2, ma2);		// RaRa IaIa ...
-		tmp2 = _mm_hadd_epi16(tmp1, tmp2);				// RaRa+IaIa ...
-		tmp2 = _mm_max_epi16(m_min, tmp2);				// at least 20*20
-		_mm_storeu_si128((__m128i*)(amp+i/2), tmp2);
-
-		tmp1 = _mm_mullo_epi16(ma1, mb1);
-		tmp2 = _mm_mullo_epi16(ma2, mb2);				// RaRb IaIb ...
-
-		__m128i mreal = _mm_hadd_epi16(tmp1, tmp2);		// RaRb+IaIb ...
-
-		tmp1 = _mm_srli_epi32(ma1, 16);
-		ma1 = _mm_slli_epi32(ma1, 16);
-		ma1 = _mm_xor_si128(ma1, tmp1);
-
-		tmp1 = _mm_srli_epi32(ma2, 16);
-		ma2 = _mm_slli_epi32(ma2, 16);
-		ma2 = _mm_xor_si128(ma2, tmp1);					// swap real and image of a, -->> Ia Ra ...
-
-		tmp1 = _mm_mullo_epi16(ma1, mb1);
-		tmp2 = _mm_mullo_epi16(ma2, mb2);				// IaRb RaIb ...
-		__m128i mimage = _mm_hsub_epi16(tmp1, tmp2);	// IaRb-RaIb ...
-
-		tmp1 = _mm_unpacklo_epi16(mreal, mimage);
-		tmp2 = _mm_unpackhi_epi16(mreal, mimage);		// interleave
-
-		_mm_storeu_si128(pout, tmp1);
-		_mm_storeu_si128(pout+1, tmp2);
-	}
-
-	return count;
-}
-
-int complex16_frequency_offset(int16_t *samples, int16_t *out, int count, float offset)
-{
-	for(int i=0; i<count; i+=16)
-	{
-		__m128 f1 = _mm_set_ps(i/2+0, i/2+1, i/2+2, i/2+3);
-		__m128 f2 = _mm_set1_ps(4);
-		__m128 fre = _mm_set1_ps(offset);
-		f2 = _mm_add_ps(f1, f2);
-		f1 = _mm_mul_ps(f1, fre);
-		f2 = _mm_mul_ps(f2, fre);
-		__m128 s1,s2,c1,c2;
-		sincos_ps(f1, &s1, &c1);
-		sincos_ps(f2, &s2, &c2);
-		f1 = _mm_set1_ps(32767);
-		s1 = _mm_mul_ps(f1, s1);
-		s2 = _mm_mul_ps(f1, s2);
-		c1 = _mm_mul_ps(f1, c1);
-		c2= _mm_mul_ps(f1, c2);
-
-		__m128i s1i = _mm_cvtps_epi32(s1);
-		__m128i s2i = _mm_cvtps_epi32(s2);
-		__m128i c1i = _mm_cvtps_epi32(c1);
-		__m128i c2i = _mm_cvtps_epi32(c2);
-
-		s1i = _mm_packs_epi32(s1i, s2i);
-		c1i = _mm_packs_epi32(c1i, c2i);
-
-
-		__m128i mb1 = _mm_unpacklo_epi16(c1i, s1i);
-		__m128i mb2 = _mm_unpackhi_epi16(c1i, s1i);
-
-
-		__m128i ma1 = _mm_loadu_si128((__m128i*)(samples+i));
-		__m128i ma2 = _mm_loadu_si128((__m128i*)(samples+i+8));
-
-		__m128i tmp1 = _mm_mulhi_epi16(ma1, mb1);
-		__m128i tmp2 = _mm_mulhi_epi16(ma2, mb2);			// RaRb IaIb ...
-
-		__m128i mreal = _mm_hsub_epi16(tmp1, tmp2);			// RaRb-IaIb ...
-
-		tmp1 = _mm_srli_epi32(ma1, 16);
-		ma1 = _mm_slli_epi32(ma1, 16);
-		ma1 = _mm_xor_si128(ma1, tmp1);
-
-		tmp1 = _mm_srli_epi32(ma2, 16);
-		ma2 = _mm_slli_epi32(ma2, 16);
-		ma2 = _mm_xor_si128(ma2, tmp1);					// swap real and image of a, -->> Ia Ra ...
-
-		tmp1 = _mm_mulhi_epi16(ma1, mb1);
-		tmp2 = _mm_mulhi_epi16(ma2, mb2);				// IaRb RaIb ...
-		__m128i mimage = _mm_hadd_epi16(tmp1, tmp2);	// IaRb+RaIb ...
-
-		tmp1 = _mm_unpacklo_epi16(mreal, mimage);
-		tmp2 = _mm_unpackhi_epi16(mreal, mimage);		// interleave
-
-		_mm_storeu_si128((__m128i*)(out+i), tmp1);
-		_mm_storeu_si128((__m128i*)(out+i+8), tmp2);
-	}
-
-	return 0;
-}
 
 
 
@@ -1291,16 +1311,16 @@ int slice(int16_t *new_data, int count, bool flush = false)
 				int16_t pkt2[MAX_SYMBOLS_PER_SAMPLE*80*2];
 				int pkt_size = MAX_SYMBOLS_PER_SAMPLE*80;
 
-				complex16_frequency_offset(queue+i*2, pkt2, pkt_size*2, offset);
-
-				offset = 0;
+// 				complex16_frequency_offset(queue+i*2, pkt2, pkt_size*2, offset);
+// 
+// 				offset = 0;
 				for(int n=0; n<pkt_size; n++)
 				{
 					pkt[n].real = queue[(i+n)*2+1];
 					pkt[n].image = queue[(i+n)*2];	// note: reverse IQ
 
-					pkt[n].real = pkt2[n*2+1];
-					pkt[n].image = pkt2[n*2];	// note: reverse IQ
+// 					pkt[n].real = pkt2[n*2+1];
+// 					pkt[n].image = pkt2[n*2];	// note: reverse IQ
 				}
 
 				int valid_data_len = 0;
@@ -1322,7 +1342,7 @@ int slice(int16_t *new_data, int count, bool flush = false)
 					valid_pkt_count++;
 				}
 
-				//fprintf(stderr, "\r%d/%d pkt", valid_pkt_count, pkt_count);
+				fprintf(stderr, "\r%d/%d pkt", valid_pkt_count, pkt_count);
 
 
 			}
@@ -1384,7 +1404,7 @@ int main()
 	tx(psdu, sizeof(psdu), &s_gen, 48);
 	delete [] s_gen;
 
-	char file[] = "testcases/video.pcm";
+	char file[] = "testcases/wifi_rt5572_usrpb205_54mbps_ant.pcm";
 	bool is8bit = strstr(file, "8bit");
 	FILE * f = fopen(file, "rb");
 	if (!f)
