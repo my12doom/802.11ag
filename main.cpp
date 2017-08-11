@@ -279,6 +279,33 @@ int complex_frequency_offset(complex *samples, int count, float offset, float ph
 	return 0;
 }
 
+// count: number of complex
+int complex_from_int16(complex *out, int16_t *in, int count, bool swap = false)
+{
+	__m128i zero = _mm_setzero_si128();
+	for(int i=0; i<count*2; i+=8)
+	{
+		__m128i m = _mm_loadu_si128((__m128i*)(in+i));
+		if (swap)
+		{
+			__m128i a = _mm_srli_epi32(m, 16);
+			__m128i b = _mm_slli_epi32(m, 16);
+			m = _mm_or_si128(a, b);
+		}
+		__m128i sign = _mm_cmplt_epi16(m, zero);
+		__m128i m1 = _mm_unpacklo_epi16(m, sign);
+		__m128i m2 = _mm_unpackhi_epi16(m, sign);
+
+		__m128 m1f = _mm_cvtepi32_ps(m1);
+		__m128 m2f = _mm_cvtepi32_ps(m2);
+
+		_mm_storeu_ps((float*)(out+i/2), m1f);
+		_mm_storeu_ps((float*)(out+i/2+2), m2f);
+	}
+
+	return 0;
+}
+
 int init_interleaver_pattern()
 {
 	int bpsc_tbl[4] = {1,2,4,6};
@@ -1314,14 +1341,8 @@ int slice(int16_t *new_data, int count, bool flush = false)
 // 				complex16_frequency_offset(queue+i*2, pkt2, pkt_size*2, offset);
 // 
 // 				offset = 0;
-				for(int n=0; n<pkt_size; n++)
-				{
-					pkt[n].real = queue[(i+n)*2+1];
-					pkt[n].image = queue[(i+n)*2];	// note: reverse IQ
 
-// 					pkt[n].real = pkt2[n*2+1];
-// 					pkt[n].image = pkt2[n*2];	// note: reverse IQ
-				}
+				complex_from_int16(pkt, queue+i*2, pkt_size, true);
 
 				int valid_data_len = 0;
 				uint8_t out_data[4096];
