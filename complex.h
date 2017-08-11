@@ -108,4 +108,9 @@ public:
 
 		return *this;
 	}
+
+	complex operator / (complex &b)
+	{
+		return ((*this) * b.conjugate()) / b.sq_magnitude();
+	}
 };

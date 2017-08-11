@@ -444,6 +444,7 @@ complex LT_time_space[128];			// LT = long training, 2 repetition.
 complex LT_frequency_space[64];		// one OFDM symbol only
 complex ST_time_space[160];			// LT = long training, 2 repetition.
 complex ST_frequency_space[64];		// one OFDM symbol only
+complex LTS[64];
 
 int init_training_sequence()
 {
@@ -459,7 +460,10 @@ int init_training_sequence()
 
 
 	for(int i=0; i<64; i++)
+	{
 		LT_frequency_space[i].real = LTS[i] * (32767);
+		::LTS[i].real = LTS[i];
+	}
 
 	fft_complex(LT_frequency_space, LT_time_space, true);
 	for(int i=0; i<64; i++)
@@ -818,21 +822,9 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 	static complex h[64];
 	for(int i=-26; i<=26; i++)
 	{
-		if (i == 0)
-			continue;
-
 		int n = i > 0 ? i : (i+64);
-		//printf("LT[%d]=%.1f,%.1f, %.2f\n", i, lt_fft[i].real, lt_fft[i].image, lt_fft[i].argument());
 
-		float phase_diffs = phase_sub(LT_frequency_space[n].argument(), lt_rx_fft[n].argument());
-		float amplitude_normalizer = 1/lt_rx_fft[n].magnitude();
-
-		h[n] = complex::from_phase_magnitude(phase_diffs, amplitude_normalizer);
-
-// 		assert(abs(phase_diffs- (LT_frequency_space[n]*lt_rx_fft[n].conjugate()).argument()) < 0.05);
-		complex normalized = lt_rx_fft[n]*h[n];
-
-// 		printf("%d,%.2f,%.4f\n", i, normalized.argument(), normalized.magnitude());
+		h[n] = LTS[n] / lt_rx_fft[n];
 	}
 
 
