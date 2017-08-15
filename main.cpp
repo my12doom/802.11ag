@@ -764,7 +764,7 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 	{
 		float corelation = correalation((float*)&s[n], (float*)LT_time_space, 128);
 
-// 		fprintf(f, "%d,%f,%f\n", n, autocorelation, s[n].magnitude());
+//		fprintf(f, "%d,%f,%f\n", n, corelation, s[n].magnitude());
 		for(int i=0; i<3; i++)
 		{
 			if (corelation > correction_value[i])
@@ -794,30 +794,21 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 	printf("symbols start @ %d (%.1fus)\n", symbol_start, symbol_start/20.0f);
 
 	// fine frequency offset
-// 	complex _df;
-// 	float ff[64];
-// 	for(int i=0; i<64; i++)
-// 	{
-// 		complex _f = s[symbol_start-64+i] * s[symbol_start-128+i].conjugate();
-// 		_df += _f;
-// 		
-// 		ff[i] = _f.argument();
-// 		printf("%f\n", _f.argument());
-// 	}
-// 
-// 	float ff_k;
-// 	float ff_b;
-// 	line_fitting_y(ff, 63, &ff_k, &ff_b);
-// 
-// 	float df = _df.argument()/64;
-// 
-// 	printf("fine frequency offset:%f degree / sample (%f Mhz)\n", df * 180 / PI, 20 / (2 * PI / df) );
+	complex _df;
+	for(int i=0; i<64; i++)
+		_df += s[symbol_start-64+i] * s[symbol_start-128+i].conjugate();
+	float df = _df.argument()/64;
+
+	printf("fine frequency offset:%f degree / sample (%f Mhz)\n", df * 180 / PI, 20 / (2 * PI / df) );
+
+	// apply fine frequency offset of header and add to coarse frequency for main body
+	complex_frequency_offset(s, MAX_SIGNAL_FIELD_POS, -df);
+	frequency_offset -= df;
 
 
 	// initial phase and amplitude equalization
 	static complex lt_rx_fft[64];
 	fft_complex(s+symbol_start-64, lt_rx_fft);
-// 	fft_complex(LT, lt_fft);
 
 	static complex h[64];
 	for(int i=-26; i<=26; i++)
@@ -890,7 +881,6 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 		|| signal_decoded_bits[4] != 0
 		|| parity != signal_decoded_bits[17]
 		|| !tail_is_zero
-// 		|| length > 1024
 		)
 	{
 		printf("invalid signal field\n");
@@ -997,7 +987,6 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 // 			printf("%d,%f\n", i, k_i);
 			
 			float phase_error = -(k_i * j + (b1[0]+b1[1]+b1[2]+b1[3])/4);
-// 			complex offset(cos(phase_error), sin(phase_error));
 			symbols[j][idx] = symbols[j][idx] * cordic(phase_error);//offset;
 		}
 	}
@@ -1007,6 +996,61 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 	ALIGN uint8_t service_and_data_deinterleaved_bits[8192*8] = {0};
 	ALIGN uint8_t service_and_data_decoded_bits[8192*8];
 	int pos = 0;
+
+	mapper demapper = modulation2demapper(mod);
+	mapper remapper = modulation2mapper(mod);
+	static complex remapped_symbol[64];
+	int * pattern = modulation2inerleaver_pattern(mod);
+	int bits_per_symbol = 48*mod;
+	int data_bit_per_symbol = bits_per_symbol * pun / 12;
+
+	float EVM = 0;
+
+	static complex h2[64];
+	for(int i=0; i<64; i++)
+	{
+		h[i].real = 1;
+		h[i].image = 0;
+	}
+
+	float alpha = 0.3;
+
+	for(int i=0; i<data_symbol_count; i++)
+	{
+		// continual equalizing
+		for(int j=-26; j<26; j++)
+		{
+			if (j == 0 || j == -21 || j == 21 || j == 7 || j == -7)	// ignore DC/pilots
+				continue;
+			int n = j<0 ? j+64 : j;
+
+			symbols[i+1][n] *= h[n];
+		}
+
+		// map bits
+		uint8_t *p = service_and_data_bits + bits_per_symbol*i;
+		demapper(symbols[i+1], p);
+		remapper(remapped_symbol, p);
+
+		// EVM and h calculation
+		for(int j=-26; j<26; j++)
+		{
+			if (j == 0 || j == -21 || j == 21 || j == 7 || j == -7)	// ignore DC/pilots
+				continue;
+			int n = j<0 ? j+64 : j;
+
+			complex _h = remapped_symbol[n] / symbols[i+1][n];
+			h[n] = h[n]*(1-alpha) + _h * alpha;
+			float _EVM = (symbols[i+1][n] - remapped_symbol[n]).magnitude();
+			EVM += _EVM;
+		}
+
+		// deinterleave
+		uint8_t *p2 = service_and_data_deinterleaved_bits+ bits_per_symbol*i;
+		for(int j=0; j<bits_per_symbol; j++)
+			p2[j] = p[pattern[j]];
+	}
+
 
 // 	FILE * constellation = fopen("constellation.csv", "wb");
 // 	fprintf(constellation, "N,P,A\n");
@@ -1028,22 +1072,8 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 // 	}
 // 	fclose(constellation);
 
-	mapper demapper = modulation2demapper(mod);
-	int * pattern = modulation2inerleaver_pattern(mod);
-	int bits_per_symbol = 48*mod;
-	int data_bit_per_symbol = bits_per_symbol * pun / 12;
-
-	for(int i=0; i<data_symbol_count; i++)
-	{
-		// map bits
-		uint8_t *p = service_and_data_bits + bits_per_symbol*i;
-		demapper(symbols[i+1], p);
-
-		// deinterleave
-		uint8_t *p2 = service_and_data_deinterleaved_bits+ bits_per_symbol*i;
-		for(int j=0; j<bits_per_symbol; j++)
-			p2[j] = p[pattern[j]];
-	}
+	EVM /= 52*data_symbol_count;
+	printf("EVM>=%.1f%%(%.1fdb)\n", EVM*100, log10(EVM)*20);
 
 	printf("sample_count = %d\n", sample_count);
 	fflush(stdout);
@@ -1389,8 +1419,6 @@ int slice(int16_t *new_data, int count, bool flush = false)
 
 int main()
 {
-	printf("sizeof(complex)=%d\n", sizeof(complex));
-
 	init_training_sequence();
 	init_scrambler();
 	init_interleaver_pattern();
@@ -1417,7 +1445,7 @@ int main()
 	tx(psdu, sizeof(psdu), &s_gen, 48);
 	delete [] s_gen;
 
-	char file[] = "testcases/wifi_rt5572_usrpb205_54mbps_ant.pcm";
+	char file[] = "testcases/wifi_rt5572_usrpb205_18mbps_nonlinear.pcm";
 	bool is8bit = strstr(file, "8bit");
 	FILE * f = fopen(file, "rb");
 	if (!f)

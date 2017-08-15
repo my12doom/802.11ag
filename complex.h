@@ -62,6 +62,16 @@ public:
 		return o;
 	}
 
+	complex operator *(float b)
+	{
+		complex o;
+
+		o.real = this->real * b;
+		o.image = this->image * b;
+
+		return o;
+	}
+
 	complex operator *=(const complex &b)
 	{
 		complex o;
@@ -90,6 +100,25 @@ public:
 
 		return *this;
 	}
+
+	complex operator -(const complex &b)
+	{
+		complex o(real, image);
+
+		o.real -= b.real;
+		o.image -= b.image;
+
+		return o;
+	}
+
+	complex& operator -=(const complex &b)
+	{
+		real -= b.real;
+		image -= b.image;
+
+		return *this;
+	}
+
 
 	complex operator /(const float &b)
 	{

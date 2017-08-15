@@ -138,10 +138,10 @@ int bits_to_QPSK_symbols(complex *symbols, uint8_t *bits)
 	int j = 0;
 	static complex tbl[4] =
 	{
-		complex(-1.0f, 1.0f),			// WTF? image reversed?
-		complex(-1.0f, -1.0f),
-		complex(1.0f, 1.0f),
-		complex(1.0f, -1.0f),
+		complex(-0.707f, 0.707f),			// WTF? image reversed?
+		complex(-0.707f, -0.707f),
+		complex(0.707f, 0.707f),
+		complex(0.707f, -0.707f),
 	};
 	for(int i=-26;i<=26;i++)
 	{
