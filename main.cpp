@@ -1005,6 +1005,8 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 	int data_bit_per_symbol = bits_per_symbol * pun / 12;
 
 	float EVM = 0;
+	float sum = 0;
+	float sum2 = 0;
 
 	static complex h2[64];
 	for(int i=0; i<64; i++)
@@ -1035,9 +1037,16 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 		// EVM and h calculation
 		for(int j=-26; j<26; j++)
 		{
-			if (j == 0 || j == -21 || j == 21 || j == 7 || j == -7)	// ignore DC/pilots
-				continue;
 			int n = j<0 ? j+64 : j;
+			if (j == 0)										// ignore DC
+				continue;
+
+			if (j == -21 || j == 21 || j == 7 || j == -7)	// calculate SNR of pilots
+			{
+				sum += symbols[i+1][n].magnitude();
+				sum2 += symbols[i+1][n].sq_magnitude();
+				continue;
+			}
 
 			complex _h = remapped_symbol[n] / symbols[i+1][n];
 			h[n] = h[n]*(1-alpha) + _h * alpha;
@@ -1053,7 +1062,7 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 
 
 // 	FILE * constellation = fopen("constellation.csv", "wb");
-// 	fprintf(constellation, "N,P,A\n");
+// 	fprintf(constellation, "N,I,Q,P,A\n");
 // 	for(int i=1; i<symbol_count; i++)
 // 	{
 // 		for(int j=-26; j<=26; j++)
@@ -1062,18 +1071,24 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 // 				continue;
 // 
 // 			int n = j>0?j:j+64;
-// 			if ((n==7||n==21||n==-7||n==-21||n==64-7||n==64-21))
+// 			if (!(n==7||n==21||n==-7||n==-21||n==64-7||n==64-21))
 // 				continue;
 // 
 // 			complex v = symbols[i][n];
 // 
-// 			fprintf(constellation, "%d,%f,%f,%f\n", i, v.real, v.image, v.argument());
+// 			fprintf(constellation, "%d,%f,%f,%f,%f\n", i, v.real, v.image, v.argument(), v.magnitude());
 // 		}
 // 	}
 // 	fclose(constellation);
 
 	EVM /= 52*data_symbol_count;
+
+	float avg = sum / (4*data_symbol_count);
+	float variance = sum2 / (4*data_symbol_count) - avg*avg;
+	float SNR = avg*avg/variance;
+	float SNRdb = 10*log10(SNR);
 	printf("EVM>=%.1f%%(%.1fdb)\n", EVM*100, log10(EVM)*20);
+	printf("SNR<=%.1fdb\n", SNRdb);
 
 	printf("sample_count = %d\n", sample_count);
 	fflush(stdout);
@@ -1274,7 +1289,7 @@ int tx(uint8_t *psdu, int count, complex **out, int mbps = 6)
 	f = fopen("out_16bit.pcm", "wb");
 	for(int i=0; i<sample_count; i++)
 	{
-		int m = 512;
+		int m = 1<<6;
 		int16_t I = int((s[i].real + (rand()&0xff-127)*m/float(m*2)) / m) * m;
 		int16_t Q = int((s[i].image + (rand()&0xff-127)*m/float(m*2)) / m) * m;
 		fwrite(&Q, 1, 2, f);
