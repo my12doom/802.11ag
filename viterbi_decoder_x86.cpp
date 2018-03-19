@@ -371,8 +371,8 @@ viterbi_decoder::viterbi_chunks_init_sse2() {
 
 	int polys[2] = { 0x6d, 0x4f };
 	for(i=0; i < 32; i++) {
-		d_branchtab27_sse2[0].c[i] = (polys[0] < 0) ^ PARTAB[(2*i) & abs(polys[0])] ? 1 : 0;
-		d_branchtab27_sse2[1].c[i] = (polys[1] < 0) ^ PARTAB[(2*i) & abs(polys[1])] ? 1 : 0;
+		d_branchtab27_sse2[0].c[i] = PARTAB[(2*i) & abs(polys[0])] ? 1 : 0;
+		d_branchtab27_sse2[1].c[i] = PARTAB[(2*i) & abs(polys[1])] ? 1 : 0;
 	}
 
 	for (i = 0; i < 64; i++) {

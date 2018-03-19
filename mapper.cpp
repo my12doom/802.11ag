@@ -1,6 +1,6 @@
 #include "mapper.h"
 
-mapper modulation2mapper(modulation modu)		// mapper: map bits to OFDM symbol
+mapper get_mapper(modulation modu)		// mapper: map bits to OFDM symbol
 {
 	if (modu == BPSK)
 		return bits_to_BPSK_symbols;
@@ -13,7 +13,7 @@ mapper modulation2mapper(modulation modu)		// mapper: map bits to OFDM symbol
 
 	return NULL;
 }
-mapper modulation2demapper(modulation modu)	// demapper: map OFDM symbol to bits
+mapper get_demapper(modulation modu)	// demapper: map OFDM symbol to bits
 {
 	if (modu == BPSK)
 		return BPSK_symbols_to_bits;
