@@ -178,6 +178,14 @@
 				>
 			</File>
 			<File
+				RelativePath=".\FFT_fixed.cpp"
+				>
+			</File>
+			<File
+				RelativePath=".\FFT_fixed.h"
+				>
+			</File>
+			<File
 				RelativePath=".\Fourier.cpp"
 				>
 			</File>
@@ -229,6 +237,14 @@
 		<Filter
 			Name="convolutional"
 			>
+			<File
+				RelativePath=".\convolutional.cpp"
+				>
+			</File>
+			<File
+				RelativePath=".\convolutional.h"
+				>
+			</File>
 			<File
 				RelativePath=".\viterbi_decoder.h"
 				>

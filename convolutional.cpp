@@ -92,8 +92,11 @@ int viterbi_soft_decode(const int16_t *inputs, int input_count, uint8_t *output)
 	}
 
 	// trace back
+	
+	// find state with least error metric.
+	// note that if you are using a return to zero encoder, skip this and start tracking back from zero.
 	int least_metric = 0x7fffffff;
-	int least_index;
+	int least_index = 0;
 	for(int j=0; j<64; j++)
 	{
 		if (metric[output_count-1][j] < least_metric)
@@ -111,7 +114,7 @@ int viterbi_soft_decode(const int16_t *inputs, int input_count, uint8_t *output)
 		int16_t pre1 = (least_index>>1) | (1<<5);
 
 		// clamp unreachable starting phase of trellis
-		if (i<=6)
+		if (i<6)
 			pre1 = pre0;
 
 		least_index = metric[i-1][pre0] < metric[i-1][pre1] ? pre0 : pre1;
@@ -126,22 +129,38 @@ int convolutional80211_test()
 {
 	convolutional80211_init();
 
-	const int count = 10;
-	uint8_t bits[count];
-	for(int i=0; i<count; i++)
-		bits[i] = (i >> 1)&1;
+	const int count = 24;
+	uint8_t bits[count] = {1, 0, 1, 0, 1, 1, 1, 1, 1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0};
+// 	for(int i=0; i<count; i++)
+// 		bits[i] = (i >> 1)&1;
 
 	int16_t encoded[count*2];
 	convolutional80211_encode(bits, encoded, count);
-	for(int i=1; i<count*2; i+=2)
-		encoded[i] = 0;
+	for(int i=0; i<count*2; i+=6)
+	{
+		encoded[i+3] = 0;
+		encoded[i+4] = 0;
+	}
+// 	for(int i=0; i<count*2; i+=40)
+// 	{
+// 		encoded[i] = 127;
+// 	}
+// 	for(int i=40; i<80; i+=3)
+// 		encoded[i] *= (i&1)-0.5;
+	for(int i=14; i<24; i++)
+		encoded[i] *= -1;
 
 	uint8_t decoded[count];
 	viterbi_soft_decode(encoded, count*2, decoded);
 
-	int bit_error = 0;
-	for(int i=0; i<count; i++)
-		if (bits[i] != decoded[i])
-			bit_error++;
+	printf("decoded:\n");
+	int error_count = 0;
+	for(int i=0; i<sizeof(bits); i++)
+	{
+		error_count += decoded[i] ^ bits[i];
+		printf("%d%s", decoded[i], decoded[i] == bits[i] ? " " : "x");
+	}
+	printf("\nerror=%d/%d(%.2f%%)\n", error_count, count, error_count*100.0f/count);
+
 	return 0;
 }

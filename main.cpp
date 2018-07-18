@@ -8,11 +8,13 @@
 #include "Fourier.h"
 #include "complex.h"
 #include "line_fitting.h"
+#include "convolutional.h"
 #include "viterbi_decoder.h"
 #include "crc32_80211.h"
 #include "common.h"
 #include "mapper.h"
 #include "sse_mathfun.h"
+#include "FFT_fixed.h"
 
 #ifdef WIN32
 #include <Windows.h>
@@ -26,12 +28,14 @@
 using namespace gr::ieee802_11;
 
 #define countof(x) (sizeof(x)/sizeof(x[0]))
+#define USE_FIXED_FFT 0
 
 const int CORDIC_TBL_COUNT = 100000;
 const int MAX_SYMBOLS_PER_SAMPLE = 200;
 complex cordic_tbl[CORDIC_TBL_COUNT];
 int16_t cordic_tbl16[CORDIC_TBL_COUNT*2];
 int interleave_pattern[4][288];	// [BPSK, QPSK, 16QAM, 64QAM] [max: 6*48bits]
+const int tx_scale = 32767;
 
 int init_cordic()
 {
@@ -398,8 +402,11 @@ int fft_complex(complex *in, complex *out, bool ifft = false)
 		Q[i] = in[i].image;
 	}
 
+#if USE_FIXED_FFT == 1
+	fft_fixed(64, ifft, I, Q, IO, QO);
+#else
 	fft_real_t(64, ifft, I, Q, IO, QO);
-
+#endif
 	for(int i=0; i<64; i++)
 	{
 		out[i].real = IO[i];
@@ -461,7 +468,7 @@ int init_training_sequence()
 
 	for(int i=0; i<64; i++)
 	{
-		LT_frequency_space[i].real = LTS[i] * (32767);
+		LT_frequency_space[i].real = LTS[i] * (tx_scale);
 		::LTS[i].real = LTS[i];
 	}
 
@@ -482,43 +489,41 @@ int init_training_sequence()
 
 
 	// short training sequence
-	int scale = 32767*sqrt(13.0/6.0);
+	ST_frequency_space[4].real = -1 * tx_scale;
+	ST_frequency_space[4].image = -1 * -tx_scale;
 
-	ST_frequency_space[4].real = -1 * scale;
-	ST_frequency_space[4].image = -1 * -scale;
+	ST_frequency_space[8].real = -1 * tx_scale;
+	ST_frequency_space[8].image = -1 * -tx_scale;
 
-	ST_frequency_space[8].real = -1 * scale;
-	ST_frequency_space[8].image = -1 * -scale;
+	ST_frequency_space[12].real = 1 * tx_scale;
+	ST_frequency_space[12].image = 1 * -tx_scale;
 
-	ST_frequency_space[12].real = 1 * scale;
-	ST_frequency_space[12].image = 1 * -scale;
+	ST_frequency_space[16].real = 1 * tx_scale;
+	ST_frequency_space[16].image = 1 * -tx_scale;
 
-	ST_frequency_space[16].real = 1 * scale;
-	ST_frequency_space[16].image = 1 * -scale;
+	ST_frequency_space[20].real = 1 * tx_scale;
+	ST_frequency_space[20].image = 1 * -tx_scale;
 
-	ST_frequency_space[20].real = 1 * scale;
-	ST_frequency_space[20].image = 1 * -scale;
+	ST_frequency_space[24].real = 1 * tx_scale;
+	ST_frequency_space[24].image = 1 * -tx_scale;
 
-	ST_frequency_space[24].real = 1 * scale;
-	ST_frequency_space[24].image = 1 * -scale;
+	ST_frequency_space[64-4].real = 1 * tx_scale;
+	ST_frequency_space[64-4].image = 1 * -tx_scale;
 
-	ST_frequency_space[64-4].real = 1 * scale;
-	ST_frequency_space[64-4].image = 1 * -scale;
+	ST_frequency_space[64-8].real = -1 * tx_scale;
+	ST_frequency_space[64-8].image = -1 * -tx_scale;
 
-	ST_frequency_space[64-8].real = -1 * scale;
-	ST_frequency_space[64-8].image = -1 * -scale;
+	ST_frequency_space[64-12].real = -1 * tx_scale;
+	ST_frequency_space[64-12].image = -1 * -tx_scale;
 
-	ST_frequency_space[64-12].real = -1 * scale;
-	ST_frequency_space[64-12].image = -1 * -scale;
+	ST_frequency_space[64-16].real = 1 * tx_scale;
+	ST_frequency_space[64-16].image = 1 * -tx_scale;
 
-	ST_frequency_space[64-16].real = 1 * scale;
-	ST_frequency_space[64-16].image = 1 * -scale;
+	ST_frequency_space[64-20].real = -1 * tx_scale;
+	ST_frequency_space[64-20].image = -1 * -tx_scale;
 
-	ST_frequency_space[64-20].real = -1 * scale;
-	ST_frequency_space[64-20].image = -1 * -scale;
-
-	ST_frequency_space[64-24].real = 1 * scale;
-	ST_frequency_space[64-24].image = 1 * -scale;
+	ST_frequency_space[64-24].real = 1 * tx_scale;
+	ST_frequency_space[64-24].image = 1 * -tx_scale;
 
 
 	fft_complex(ST_frequency_space, ST_time_space, true);
@@ -714,21 +719,22 @@ int test_convolutional_code()
 
 	convolutional_encoding(data, encoded, sizeof(data));
 
+
+
+	puncturing pun = _3_4;
+	int s1 = puncture(encoded, sizeof(data)*2, pun);
 	printf("encoded:\n");
 	for(int i=0; i<sizeof(data); i++)
 		printf("%d%d ", encoded[i*2+0], encoded[i*2+1]);
 	printf("\n");
 
-
-	puncturing pun = _3_4;
-	int s1 = puncture(encoded, sizeof(data)*2, pun);
-// 	for(int i=0; i<14; i++)
-// 		encoded[i] ^= 1;
 // 
-// 	printf("corrupted:\n");
-// 	for(int i=0; i<sizeof(data); i++)
-// 		printf("%d%d ", encoded[i*2+0], encoded[i*2+1]);
-// 	printf("\n");
+	for(int i=14; i<24; i++)
+		encoded[i] ^= 1;
+	printf("corrupted:\n");
+	for(int i=0; i<sizeof(data); i++)
+		printf("%d%d ", encoded[i*2+0], encoded[i*2+1]);
+	printf("\n");
 	int s2 = depuncture(encoded, s1, pun);
 
 	assert(s2 == sizeof(data)*2);
@@ -744,6 +750,7 @@ int test_convolutional_code()
 	return 0;
 }
 
+// frequency_offset: frequency unit is radian per sample
 int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_t *out_data, int *valid_data_len)
 {
 	int l = gettime();
@@ -798,6 +805,7 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 	for(int i=0; i<64; i++)
 		_df += s[symbol_start-64+i] * s[symbol_start-128+i].conjugate();
 	float df = _df.argument()/64;
+	df = 0;
 
 	printf("fine frequency offset:%f degree / sample (%f Mhz)\n", df * 180 / PI, 20 / (2 * PI / df) );
 	static FILE * ffine = fopen("FineFrequency.csv", "wb");
@@ -1056,25 +1064,25 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 	}
 
 
-	FILE * constellation = fopen("constellation.csv", "wb");
-	fprintf(constellation, "N,I,Q,P,A\n");
-	for(int i=1; i<symbol_count; i++)
-	{
-		for(int j=-26; j<=26; j++)
-		{
-			if (j == 0)
-				continue;
-
-			int n = j>0?j:j+64;
-			if ((n==7||n==21||n==-7||n==-21||n==64-7||n==64-21))
-				continue;
-
-			complex v = symbols[i][n];
-
-			fprintf(constellation, "%d,%f,%f,%f,%f\n", i, v.real, v.image, v.argument(), v.magnitude());
-		}
-	}
-	fclose(constellation);
+// 	FILE * constellation = fopen("constellation.csv", "wb");
+// 	fprintf(constellation, "N,I,Q,P,A\n");
+// 	for(int i=1; i<symbol_count; i++)
+// 	{
+// 		for(int j=-26; j<=26; j++)
+// 		{
+// 			if (j == 0)
+// 				continue;
+// 
+// 			int n = j>0?j:j+64;
+// 			if ((n==7||n==21||n==-7||n==-21||n==64-7||n==64-21))
+// 				continue;
+// 
+// 			complex v = symbols[i][n];
+// 
+// 			fprintf(constellation, "%d,%f,%f,%f,%f\n", i, v.real, v.image, v.argument(), v.magnitude());
+// 		}
+// 	}
+// 	fclose(constellation);
 
 	EVM /= 52*data_symbol_count;
 	printf("EVM>=%.1f%%(%.1fdb)\n", EVM*100, log10(EVM)*20);
@@ -1100,7 +1108,8 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 		{
 			bit_error_count ++;
 		}
-	printf("BER >= %.3f%%\n", (float)bit_error_count*100/(bits_per_symbol*data_symbol_count));
+	float BER = (float)bit_error_count/(bits_per_symbol*data_symbol_count);
+	printf("BER >= %.3f%%\n", BER*100);
 
 
 	uint8_t out_bytes[8192];
@@ -1116,6 +1125,8 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 // 	fwrite(out_bytes+2, 1, length, f);
 // 	fclose(f);
 
+	static FILE * fber = fopen("BER.csv", "wb");
+
 	if (crc == crc_received)
 	{
 		memcpy(out_data, out_bytes+2, length);
@@ -1126,6 +1137,9 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 		*valid_data_len = 0;
 	}
 
+	fprintf(fber, "%.3f,%d\n", BER, crc == crc_received);
+	fflush(fber);
+
 	printf("%dms\n", gettime()-l);
 	return symbol_start + symbol_count * 80;
 }
@@ -1133,8 +1147,6 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 
 int tx(uint8_t *psdu, int count, complex **out, int mbps = 6)
 {
-	float scale = 32767;
-
 	modulation mod = rate2modulation(mbps);
 	puncturing pun = rate2puncturing(mbps);
 	int data_bits_per_symbol = mod*48 * pun/12;
@@ -1186,14 +1198,14 @@ int tx(uint8_t *psdu, int count, complex **out, int mbps = 6)
 		if (i == 0 || i == -7 || i == -21 || i == 7 || i == 21)
 			continue;
 		
-		signal_symbol[i>0?i:i+64] = signal_bits_interleaved[j++] ? scale : - scale;
+		signal_symbol[i>0?i:i+64] = signal_bits_interleaved[j++] ? tx_scale : - tx_scale;
 	}
 
 	// pilot tones
-	signal_symbol[7].real = scale;
-	signal_symbol[21].real = -scale;
-	signal_symbol[64-7].real = scale;
-	signal_symbol[64-21].real = scale;
+	signal_symbol[7].real = tx_scale;
+	signal_symbol[21].real = -tx_scale;
+	signal_symbol[64-7].real = tx_scale;
+	signal_symbol[64-21].real = tx_scale;
 
 
 	complex signal_symbol_ifft[64];
@@ -1263,8 +1275,8 @@ int tx(uint8_t *psdu, int count, complex **out, int mbps = 6)
 		// scale
 		for(int j=0; j<64; j++)
 		{
-			symbol_fre[j].real *= scale;
-			symbol_fre[j].image *= scale;
+			symbol_fre[j].real *= tx_scale;
+			symbol_fre[j].image *= tx_scale;
 		}
 
 		// ifft
@@ -1498,6 +1510,8 @@ int main()
 	init_cordic();
 	init_ones();
 	test_noise();
+	//convolutional80211_test();
+	//test_convolutional_code();
 
 // 	float wtf[128] = {
 // 		0,0,11480,0,21213,0,27716,0,30000,0,27716,0,21213,0,11480,0,0,0,-11480,0,-21213,0,-27716,0,-30000,0,-27716,0,-21213,0,-11480,0,0,0,11480,0,21213,0,27716,0,30000,0,27716,0,21213,0,11480,0,0,0,-11480,0,-21213,0,-27716,0,-30000,0,-27716,0,-21213,0,-11480,0,0,0,11480,0,21213,0,27716,0,30000,0,27716,0,21213,0,11480,0,0,0,-11480,0,-21213,0,-27716,0,-30000,0,-27716,0,-21213,0,-11480,0,0,0,11480,0,21213,0,27716,0,30000,0,27716,0,21213,0,11480,0,0,0,-11480,0,-21213,0,-27716,0,-30000,0,-27716,0,-21213,0,-11480,0,

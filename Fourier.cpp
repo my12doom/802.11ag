@@ -43,7 +43,7 @@ void fft_real_t (unsigned int p_nSamples, bool p_bInverseTransform, real_t *p_lp
 
 	unsigned int NumBits;
 	unsigned int i, j, k, n;
-	unsigned int BlockSize, BlockEnd;
+	unsigned int BlockSize;
 
 	real_t angle_numerator = 2.0 * PI;
 	real_t tr, ti;
@@ -66,7 +66,6 @@ void fft_real_t (unsigned int p_nSamples, bool p_bInverseTransform, real_t *p_lp
 	}
 
 
-	BlockEnd = 1;
 	for( BlockSize = 2; BlockSize <= p_nSamples; BlockSize <<= 1 )
 	{
 		real_t delta_angle = angle_numerator / (real_t)BlockSize;
@@ -75,6 +74,7 @@ void fft_real_t (unsigned int p_nSamples, bool p_bInverseTransform, real_t *p_lp
 		real_t cm2 = cos ( -2 * delta_angle );
 		real_t cm1 = cos ( -delta_angle );
 		real_t w = 2 * cm1;
+
 		real_t ar[3], ai[3];
 
 		for( i=0; i < p_nSamples; i += BlockSize )
@@ -86,7 +86,7 @@ void fft_real_t (unsigned int p_nSamples, bool p_bInverseTransform, real_t *p_lp
 			ai[2] = sm2;
 			ai[1] = sm1;
 
-			for ( j=i, n=0; n < BlockEnd; j++, n++ )
+			for ( j=i, n=0; n < BlockSize/2; j++, n++ )
 			{
 
 				ar[0] = w*ar[1] - ar[2];
@@ -97,7 +97,7 @@ void fft_real_t (unsigned int p_nSamples, bool p_bInverseTransform, real_t *p_lp
 				ai[2] = ai[1];
 				ai[1] = ai[0];
 
-				k = j + BlockEnd;
+				k = j + BlockSize/2;
 				tr = ar[0]*p_lpRealOut[k] - ai[0]*p_lpImagOut[k];
 				ti = ar[0]*p_lpImagOut[k] + ai[0]*p_lpRealOut[k];
 
@@ -110,19 +110,18 @@ void fft_real_t (unsigned int p_nSamples, bool p_bInverseTransform, real_t *p_lp
 			}
 		}
 
-		BlockEnd = BlockSize;
 
 	}
 
 
 	if( p_bInverseTransform )
 	{
-		real_t denom = (real_t)p_nSamples;
+		real_t denom = 1.0/(real_t)p_nSamples;
 
 		for ( i=0; i < p_nSamples; i++ )
 		{
-			p_lpRealOut[i] /= denom;
-			p_lpImagOut[i] /= denom;
+			p_lpRealOut[i] *= denom;
+			p_lpImagOut[i] *= denom;
 		}
 	}
 
