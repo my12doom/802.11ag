@@ -28,14 +28,14 @@
 using namespace gr::ieee802_11;
 
 #define countof(x) (sizeof(x)/sizeof(x[0]))
-#define USE_FIXED_FFT 0
+#define USE_FIXED_FFT 1
 
 const int CORDIC_TBL_COUNT = 100000;
 const int MAX_SYMBOLS_PER_SAMPLE = 200;
 complex cordic_tbl[CORDIC_TBL_COUNT];
 int16_t cordic_tbl16[CORDIC_TBL_COUNT*2];
 int interleave_pattern[4][288];	// [BPSK, QPSK, 16QAM, 64QAM] [max: 6*48bits]
-const int tx_scale = 32767;
+const int tx_scale = 20000;		// TODO: fixed iFFT has serious overflow issue.
 
 int init_cordic()
 {
@@ -60,19 +60,6 @@ complex & cordic(float phase)
 	assert(idx>=0 && idx <CORDIC_TBL_COUNT);
 	return cordic_tbl[idx];
 }
-
-int16_t* cordic16(float phase)
-{
-	static const float pi2 = acos(-1.0)*2;
-	while(phase<0)
-		phase += pi2;
-	while(phase>pi2)
-		phase -= pi2;
-	int idx = int(phase/pi2 * (CORDIC_TBL_COUNT-1));
-	assert(idx>=0 && idx <CORDIC_TBL_COUNT);
-	return cordic_tbl16+idx*2;
-}
-
 
 float correalation(float *s1, float *s2, int count)
 {
@@ -329,13 +316,6 @@ int init_interleaver_pattern()
 		}
 		for(int i=0; i<cbps; i++)
 			interleave_pattern[k][second[first[i]]] = i;
-// 		for(int i=0; i<cbps; i++)
-// 		{
-// 			if (i%8 == 0)
-// 				printf("\n");
-// 			printf("%d,", interleave_pattern[k][i]);
-// 		}
-// 		printf("\n");
 	}
 
 	return 0;
@@ -1030,14 +1010,14 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 	for(int i=0; i<data_symbol_count; i++)
 	{
 		// continual equalizing
-		for(int j=-26; j<26; j++)
-		{
-			if (j == 0 || j == -21 || j == 21 || j == 7 || j == -7)	// ignore DC/pilots
-				continue;
-			int n = j<0 ? j+64 : j;
-
-			symbols[i+1][n] *= h[n];
-		}
+// 		for(int j=-26; j<26; j++)
+// 		{
+// 			if (j == 0 || j == -21 || j == 21 || j == 7 || j == -7)	// ignore DC/pilots
+// 				continue;
+// 			int n = j<0 ? j+64 : j;
+// 
+// 			symbols[i+1][n] *= h[n];
+// 		}
 
 		// map bits
 		uint8_t *p = service_and_data_bits + bits_per_symbol*i;
@@ -1074,8 +1054,8 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 // 				continue;
 // 
 // 			int n = j>0?j:j+64;
-// 			if ((n==7||n==21||n==-7||n==-21||n==64-7||n==64-21))
-// 				continue;
+// // 			if ((n==7||n==21||n==-7||n==-21||n==64-7||n==64-21))
+// // 				continue;
 // 
 // 			complex v = symbols[i][n];
 // 
@@ -1303,7 +1283,7 @@ int tx(uint8_t *psdu, int count, complex **out, int mbps = 6)
 	FILE * f = fopen("testcases/out_16bit.pcm", "wb");
 	for(int i=0; i<sample_count; i++)
 	{
-		int m = 512;
+		int m = 128;
 		int16_t I = int((s[i].real*3 + (rand()&0xff-127)*m/float(m*2)) / m) * m;
 		int16_t Q = int((s[i].image*3 + (rand()&0xff-127)*m/float(m*2)) / m) * m;
 		fwrite(&Q, 1, 2, f);
@@ -1483,48 +1463,30 @@ int slice(int16_t *new_data, int count, bool flush = false)
 	return count;
 }
 
-int test_noise()
-{
-	int16_t data1[32768];
-	for(int i=0; i<16384; i++)
-	{
-		data1[i*2] = rand()-16384;
-		data1[i*2+1] = rand()-16384;
-
-		data1[i*2] += data1[i*2+1];
-	}
-
-	FILE * f = fopen("Z:\\noise.pcm", "wb");
-	fwrite(data1, 1, sizeof(data1), f);
-	fclose(f);
-
-	return 0;
-}
-
-
 int main()
 {
+	complexQ15 q(16384,16384);
+	complexQ15 q2(16384,8192);
+	complexQ15 q3 = q2 / q;
+	int16_t v = q.magnitude();
+	int16_t vv = q.sq_magnitude();
+	int16_t arg = q.argument();
+
+	complex fq(0.5,0.5);
+	complex fq2(0.5,0.25);
+	complex fq3 = fq2 / fq;
+
+	float fv = fq.magnitude();
+	float fvv = fq.sq_magnitude();
+	float farg = fq.argument();
+
 	init_training_sequence();
 	init_scrambler();
 	init_interleaver_pattern();
 	init_cordic();
 	init_ones();
-	test_noise();
 	//convolutional80211_test();
 	//test_convolutional_code();
-
-// 	float wtf[128] = {
-// 		0,0,11480,0,21213,0,27716,0,30000,0,27716,0,21213,0,11480,0,0,0,-11480,0,-21213,0,-27716,0,-30000,0,-27716,0,-21213,0,-11480,0,0,0,11480,0,21213,0,27716,0,30000,0,27716,0,21213,0,11480,0,0,0,-11480,0,-21213,0,-27716,0,-30000,0,-27716,0,-21213,0,-11480,0,0,0,11480,0,21213,0,27716,0,30000,0,27716,0,21213,0,11480,0,0,0,-11480,0,-21213,0,-27716,0,-30000,0,-27716,0,-21213,0,-11480,0,0,0,11480,0,21213,0,27716,0,30000,0,27716,0,21213,0,11480,0,0,0,-11480,0,-21213,0,-27716,0,-30000,0,-27716,0,-21213,0,-11480,0,
-// 	};
-	float wtf[128] = {0,0,1500};
-
-	complex cwtf[64];
-	complex cwtf2[64];
-	memcpy(&cwtf, wtf, 4*64*2);
-	fft_complex(cwtf, cwtf2, true);
-
-// 	cwtf2[4] = cwtf2[4] / 64;
-	int16_t wtf3 = cwtf2[4].image/64;
 
 	uint8_t psdu[500] = 
 	{

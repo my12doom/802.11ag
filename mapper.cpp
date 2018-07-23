@@ -67,6 +67,7 @@ int QPSK_symbols_to_bits(complex *symbols, uint8_t *bits)
 int QAM16_symbols_to_bits(complex *symbols, uint8_t *bits)
 {
 	int j = 0;
+	float level = 2.0 * sqrt(0.1);
 	for(int i=-26;i<=26;i++)
 	{
 		if (i==0 || i == -7 || i == -21 || i == 7 || i == 21)
@@ -74,9 +75,9 @@ int QAM16_symbols_to_bits(complex *symbols, uint8_t *bits)
 		int idx = i>0?i:i+64;
 
 		int b0 = symbols[idx].real > 0 ? 1 : 0;
-		int b1 = fabs(symbols[idx].real) < 0.666f ? 1 : 0;
+		int b1 = fabs(symbols[idx].real) < level ? 1 : 0;
 		int b2 = symbols[idx].image < 0 ? 1 : 0;			// WTF? image reversed?
-		int b3 = fabs(symbols[idx].image) < 0.666f ? 1 : 0;
+		int b3 = fabs(symbols[idx].image) < level ? 1 : 0;
 
 		bits[j++] = b0;
 		bits[j++] = b1;
@@ -90,6 +91,9 @@ int QAM16_symbols_to_bits(complex *symbols, uint8_t *bits)
 
 int QAM64_symbols_to_bits(complex *symbols, uint8_t *bits)
 {
+	float level1 = 2/sqrt(42.0);
+	float level2 = 4/sqrt(42.0);
+	float level3 = 6/sqrt(42.0);
 	int j = 0;
 	for(int i=-26;i<=26;i++)
 	{
@@ -98,12 +102,12 @@ int QAM64_symbols_to_bits(complex *symbols, uint8_t *bits)
 		int idx = i>0?i:i+64;
 
 		int b0 = symbols[idx].real > 0 ? 1 : 0;
-		int b1 = fabs(symbols[idx].real) < 0.5715f ? 1 : 0;
-		int b2 = (fabs(symbols[idx].real) > 0.2857f && fabs(symbols[idx].real) < 0.8571) ? 1 : 0;
+		int b1 = fabs(symbols[idx].real) < level2 ? 1 : 0;
+		int b2 = (fabs(symbols[idx].real) > level1 && fabs(symbols[idx].real) < level3) ? 1 : 0;
 
 		int b3 = symbols[idx].image < 0 ? 1 : 0;	// WTF? image reversed?
-		int b4 = fabs(symbols[idx].image) < 0.5715f ? 1 : 0;
-		int b5 = (fabs(symbols[idx].image) > 0.2857f && fabs(symbols[idx].image) < 0.8571) ? 1 : 0;
+		int b4 = fabs(symbols[idx].image) < level2 ? 1 : 0;
+		int b5 = (fabs(symbols[idx].image) > level1 && fabs(symbols[idx].image) < level3) ? 1 : 0;
 
 		bits[j++] = b0;
 		bits[j++] = b1;
@@ -136,12 +140,13 @@ int bits_to_BPSK_symbols(complex *symbols, uint8_t *bits)
 int bits_to_QPSK_symbols(complex *symbols, uint8_t *bits)
 {
 	int j = 0;
+	static float level = sqrt(2.0);
 	static complex tbl[4] =
 	{
-		complex(-0.707f, 0.707f),			// WTF? image reversed?
-		complex(-0.707f, -0.707f),
-		complex(0.707f, 0.707f),
-		complex(0.707f, -0.707f),
+		complex(-level, level),			// WTF? image reversed?
+		complex(-level, -level),
+		complex(level, level),
+		complex(level, -level),
 	};
 	for(int i=-26;i<=26;i++)
 	{
@@ -161,27 +166,28 @@ int bits_to_QPSK_symbols(complex *symbols, uint8_t *bits)
 int bits_to_QAM16_symbols(complex *symbols, uint8_t *bits)
 {
 	int j = 0;
+	static float level = sqrt(0.1);
 	static complex tbl[16] =
 	{
-		complex(-1.0f, 1.0f),			// WTF? image reversed?
-		complex(-1.0f, 0.3333f),
-		complex(-1.0f, -1.0f),
-		complex(-1.0f, -0.3333f),
+		complex(-3*level, 3*level),			// WTF? image reversed?
+		complex(-3*level, 1*level),
+		complex(-3*level, -3*level),
+		complex(-3*level, -1*level),
 
-		complex(-0.3333f, 1.0f),			// WTF? image reversed?
-		complex(-0.3333f, 0.3333f),
-		complex(-0.3333f, -1.0f),
-		complex(-0.3333f, -0.3333f),
+		complex(-1*level, 3*level),			// WTF? image reversed?
+		complex(-1*level, 1*level),
+		complex(-1*level, -3*level),
+		complex(-1*level, -1*level),
 
-		complex(1.0f, 1.0f),			// WTF? image reversed?
-		complex(1.0f, 0.3333f),
-		complex(1.0f, -1.0f),
-		complex(1.0f, -0.3333f),
+		complex(3*level, 3*level),			// WTF? image reversed?
+		complex(3*level, 1*level),
+		complex(3*level, -3*level),
+		complex(3*level, -1*level),
 
-		complex(0.3333f, 1.0f),			// WTF? image reversed?
-		complex(0.3333f, 0.3333f),
-		complex(0.3333f, -1.0f),
-		complex(0.3333f, -0.3333f),
+		complex(1*level, 3*level),			// WTF? image reversed?
+		complex(1*level, 1*level),
+		complex(1*level, -3*level),
+		complex(1*level, -1*level),
 	};
 
 	for(int i=-26;i<=26;i++)
@@ -201,84 +207,85 @@ int bits_to_QAM16_symbols(complex *symbols, uint8_t *bits)
 
 int bits_to_QAM64_symbols(complex *symbols, uint8_t *bits)
 {
-	int j = 0;
+	static float level = sqrt(1/42.0);
 	static complex tbl[64] =
 	{
-		complex(-1.0f, 1.0f),
-		complex(-1.0f, 0.7143f),
-		complex(-1.0f, 0.1429f),
-		complex(-1.0f, 0.4286f),
-		complex(-1.0f, -1.0f),
-		complex(-1.0f, -0.7143f),
-		complex(-1.0f, -0.1429f),
-		complex(-1.0f, -0.4286f),
+		complex(-7 * level, 7 * level),
+		complex(-7 * level, 5 * level),
+		complex(-7 * level, 1 * level),
+		complex(-7 * level, 3 * level),
+		complex(-7 * level, -7 * level),
+		complex(-7 * level, -5 * level),
+		complex(-7 * level, -1 * level),
+		complex(-7 * level, -3 * level),
 
-		complex(-0.7143f, 1.0f),
-		complex(-0.7143f, 0.7143f),
-		complex(-0.7143f, 0.1429f),
-		complex(-0.7143f, 0.4286f),
-		complex(-0.7143f, -1.0f),
-		complex(-0.7143f, -0.7143f),
-		complex(-0.7143f, -0.1429f),
-		complex(-0.7143f, -0.4286f),
+		complex(-5 * level, 7 * level),
+		complex(-5 * level, 5 * level),
+		complex(-5 * level, 1 * level),
+		complex(-5 * level, 3 * level),
+		complex(-5 * level, -7 * level),
+		complex(-5 * level, -5 * level),
+		complex(-5 * level, -1 * level),
+		complex(-5 * level, -3 * level),
 
-		complex(-0.1429f, 1.0f),
-		complex(-0.1429f, 0.7143f),
-		complex(-0.1429f, 0.1429f),
-		complex(-0.1429f, 0.4286f),
-		complex(-0.1429f, -1.0f),
-		complex(-0.1429f, -0.7143f),
-		complex(-0.1429f, -0.1429f),
-		complex(-0.1429f, -0.4286f),
+		complex(-1 * level, 7 * level),
+		complex(-1 * level, 5 * level),
+		complex(-1 * level, 1 * level),
+		complex(-1 * level, 3 * level),
+		complex(-1 * level, -7 * level),
+		complex(-1 * level, -5 * level),
+		complex(-1 * level, -1 * level),
+		complex(-1 * level, -3 * level),
 
-		complex(-0.4286f, 1.0f),
-		complex(-0.4286f, 0.7143f),
-		complex(-0.4286f, 0.1429f),
-		complex(-0.4286f, 0.4286f),
-		complex(-0.4286f, -1.0f),
-		complex(-0.4286f, -0.7143f),
-		complex(-0.4286f, -0.1429f),
-		complex(-0.4286f, -0.4286f),
+		complex(-3 * level, 7 * level),
+		complex(-3 * level, 5 * level),
+		complex(-3 * level, 1 * level),
+		complex(-3 * level, 3 * level),
+		complex(-3 * level, -7 * level),
+		complex(-3 * level, -5 * level),
+		complex(-3 * level, -1 * level),
+		complex(-3 * level, -3 * level),
 
 		//
-		complex(+1.0f, 1.0f),
-		complex(+1.0f, 0.7143f),
-		complex(+1.0f, 0.1429f),
-		complex(+1.0f, 0.4286f),
-		complex(+1.0f, -1.0f),
-		complex(+1.0f, -0.7143f),
-		complex(+1.0f, -0.1429f),
-		complex(+1.0f, -0.4286f),
+		complex(+7 * level, 7 * level),
+		complex(+7 * level, 5 * level),
+		complex(+7 * level, 1 * level),
+		complex(+7 * level, 3 * level),
+		complex(+7 * level, -7 * level),
+		complex(+7 * level, -5 * level),
+		complex(+7 * level, -1 * level),
+		complex(+7 * level, -3 * level),
 
-		complex(+0.7143f, 1.0f),
-		complex(+0.7143f, 0.7143f),
-		complex(+0.7143f, 0.1429f),
-		complex(+0.7143f, 0.4286f),
-		complex(+0.7143f, -1.0f),
-		complex(+0.7143f, -0.7143f),
-		complex(+0.7143f, -0.1429f),
-		complex(+0.7143f, -0.4286f),
+		complex(+5 * level, 7 * level),
+		complex(+5 * level, 5 * level),
+		complex(+5 * level, 1 * level),
+		complex(+5 * level, 3 * level),
+		complex(+5 * level, -7 * level),
+		complex(+5 * level, -5 * level),
+		complex(+5 * level, -1 * level),
+		complex(+5 * level, -3 * level),
 
-		complex(+0.1429f, 1.0f),
-		complex(+0.1429f, 0.7143f),
-		complex(+0.1429f, 0.1429f),
-		complex(+0.1429f, 0.4286f),
-		complex(+0.1429f, -1.0f),
-		complex(+0.1429f, -0.7143f),
-		complex(+0.1429f, -0.1429f),
-		complex(+0.1429f, -0.4286f),
+		complex(+1 * level, 7 * level),
+		complex(+1 * level, 5 * level),
+		complex(+1 * level, 1 * level),
+		complex(+1 * level, 3 * level),
+		complex(+1 * level, -7 * level),
+		complex(+1 * level, -5 * level),
+		complex(+1 * level, -1 * level),
+		complex(+1 * level, -3 * level),
 
-		complex(+0.4286f, 1.0f),
-		complex(+0.4286f, 0.7143f),
-		complex(+0.4286f, 0.1429f),
-		complex(+0.4286f, 0.4286f),
-		complex(+0.4286f, -1.0f),
-		complex(+0.4286f, -0.7143f),
-		complex(+0.4286f, -0.1429f),
-		complex(+0.4286f, -0.4286f),
+		complex(+3 * level, 7 * level),
+		complex(+3 * level, 5 * level),
+		complex(+3 * level, 1 * level),
+		complex(+3 * level, 3 * level),
+		complex(+3 * level, -7 * level),
+		complex(+3 * level, -5 * level),
+		complex(+3 * level, -1 * level),
+		complex(+3 * level, -3 * level),
 
 	};
 
+	int j = 0;
 	for(int i=-26;i<=26;i++)
 	{
 		if (i==0 || i == -7 || i == -21 || i == 7 || i == 21)

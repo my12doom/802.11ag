@@ -271,12 +271,10 @@ void fft_fixed(unsigned int p_nSamples, bool p_bInverseTransform, float *p_lpRea
 	short real[N_WAVE];
 	short image[N_WAVE];
 
-	float scale = 1;
-
 	for(int i=0; i<p_nSamples; i++)
 	{
-		image[i] = p_lpRealIn[i] * scale;
-		real[i] = p_lpImagIn[i] * scale;
+		image[i] = p_lpRealIn[i];
+		real[i] = p_lpImagIn[i];
 	}
 
 	int logn = 0;
@@ -288,13 +286,13 @@ void fft_fixed(unsigned int p_nSamples, bool p_bInverseTransform, float *p_lpRea
 	int c = fix_fft(real, image, logn, p_bInverseTransform);
 	if (p_bInverseTransform)
 	{
-		s = ((1 << c)/64.0);
+		s = ((1 << c)/(float)p_nSamples);
 	}
 
 	for(int i=0; i<p_nSamples; i++)
 	{
-		p_lpImagOut[i] = real[i] * s / scale;
-		p_lpRealOut[i] = image[i] * s / scale;
+		p_lpImagOut[i] = real[i] * s;
+		p_lpRealOut[i] = image[i] * s;
 	}
 }
 

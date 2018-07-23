@@ -5,6 +5,7 @@ CFLAGS=-D IEEE80211_MSSE2 -O3
 
 SOURCE = main.cpp \
 		Fourier.cpp \
+		FFT_fixed.cpp \
 		line_fitting.cpp \
 		viterbi_decoder_generic.cpp \
 		viterbi_decoder_x86.cpp \
