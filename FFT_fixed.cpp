@@ -179,6 +179,7 @@ int fix_fft(short fr[], short fi[], short m, short inverse)
 	mr = 0;
 	nn = n - 1;
 	scale = 0;
+	shift = 1;
 
 	/* decimation in time - re-order data */
 	for (m=1; m<=nn; ++m) {
@@ -205,27 +206,20 @@ int fix_fft(short fr[], short fi[], short m, short inverse)
 			/* variable scaling, depending upon data */
 			shift = 0;
 			for (i=0; i<n; ++i) {
-				j = fr[i];
-				if (j < 0)
-					j = -j;
-				m = fi[i];
-				if (m < 0)
-					m = -m;
-				if (j > 16383 || m > 16383) {
+				if (fi[i]*fi[i]+fr[i]*fr[i] > 16383*16383){
 					shift = 1;
 					break;
 				}
 			}
 			if (shift)
 				++scale;
-		} else {
-			/*
-			  fixed scaling, for proper normalization --
-			  there will be log2(n) passes, so this results
-			  in an overall factor of 1/n, distributed to
-			  maximize arithmetic accuracy.
-			*/
-			shift = 1;
+		}
+		else {
+
+			//  FFT uses fixed scaling, for proper normalization --
+			//  there will be log2(n) passes, so this results
+			//  in an overall factor of 1/n, distributed to
+			//  maximize arithmetic accuracy.
 		}
 		/*
 		  it may not be obvious, but the shift will be
@@ -240,24 +234,20 @@ int fix_fft(short fr[], short fi[], short m, short inverse)
 			wi = -Sinewave[j];
 			if (inverse)
 				wi = -wi;
-			if (shift) {
-				wr >>= 1;
-				wi >>= 1;
-			}
+			wr >>= shift;
+			wi >>= shift;
 			for (i=m; i<n; i+=istep) {
 				j = i + l;
-				tr = FIX_MPY(wr,fr[j]) - FIX_MPY(wi,fi[j]);
-				ti = FIX_MPY(wr,fi[j]) + FIX_MPY(wi,fr[j]);
+				tr = FIX_MPY(wr,fr[j])- FIX_MPY(wi,fi[j]);
+				ti = FIX_MPY(wr,fi[j])+ FIX_MPY(wi,fr[j]);
 				qr = fr[i];
 				qi = fi[i];
-				if (shift) {
-					qr >>= 1;
-					qi >>= 1;
-				}
-				fr[j] = qr - tr;
-				fi[j] = qi - ti;
-				fr[i] = qr + tr;
-				fi[i] = qi + ti;
+				qr >>= shift;
+				qi >>= shift;
+				fr[j] = (qr- tr);
+				fi[j] = (qi- ti);
+				fr[i] = (qr+ tr);
+				fi[i] = (qi+ ti);
 			}
 		}
 		--k;
@@ -273,8 +263,8 @@ void fft_fixed(unsigned int p_nSamples, bool p_bInverseTransform, float *p_lpRea
 
 	for(int i=0; i<p_nSamples; i++)
 	{
-		image[i] = p_lpRealIn[i];
-		real[i] = p_lpImagIn[i];
+		image[i] = p_lpRealIn[i]/* * 32555.0 / 32767*/;
+		real[i] = p_lpImagIn[i]/* * 32555.0 / 32767*/;
 	}
 
 	int logn = 0;

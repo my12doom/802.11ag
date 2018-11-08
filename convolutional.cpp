@@ -7,7 +7,6 @@
 
 
 
-static uint8_t ones[256];
 static int16_t polyA[128];
 static int16_t polyB[128];
 static int16_t scale;
@@ -23,6 +22,7 @@ int convolutional80211_init(int16_t scale)
 {
 	::scale = scale;
 
+	uint8_t ones[256];
 	for(int n=0; n<256; n++)
 	{
 		ones[n] = 0;

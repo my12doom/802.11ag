@@ -28,14 +28,20 @@
 using namespace gr::ieee802_11;
 
 #define countof(x) (sizeof(x)/sizeof(x[0]))
-#define USE_FIXED_FFT 1
+#define USE_FIXED_FFT 1							// fixed FFT has significant quantization error processing low amplitude signal
+#define USE_FIXED_IFFT 1
+const int tx_scale = 32000 * sqrt(42.0) / 7;		// 64QAM has largest scale 7/sqrt(42)
+												// note: the slicer need at least 8bit signal level( or 1LSB for 8bit inputs) to work properly
+												// and frequency offset estimation error due to noise can cause frame decoding failure
+const int tx_effective_bits = 16.0;
+const int MAX_SYMBOLS_PER_SAMPLE = 200;
+const int FFT_transient_time = 10;
+
 
 const int CORDIC_TBL_COUNT = 100000;
-const int MAX_SYMBOLS_PER_SAMPLE = 200;
 complex cordic_tbl[CORDIC_TBL_COUNT];
 int16_t cordic_tbl16[CORDIC_TBL_COUNT*2];
 int interleave_pattern[4][288];	// [BPSK, QPSK, 16QAM, 64QAM] [max: 6*48bits]
-const int tx_scale = 20000;		// TODO: fixed iFFT has serious overflow issue.
 
 int init_cordic()
 {
@@ -109,10 +115,10 @@ float correalation(float *s1, float *s2, int count)
 // abj = a * b.conjugate()
 // amp = |a|^2, no image part.
 // count: number of int16_t, not number of complex number
-int complex16_abj_amp(int16_t *a, int16_t *b, int16_t *abj, int16_t *amp, int count)
+int complex16_abj_amp(int16_t *a, int16_t *b, int16_t *abj, int16_t *amp, int count, int shift = 8)
 {
 	__m128i mff = _mm_set1_epi16(0xff);
-	__m128i m_min = _mm_set1_epi16(1);
+	__m128i m_min = _mm_set1_epi16(0);
 
 	for(int i=0; i<count; i+=16)
 	{
@@ -124,16 +130,20 @@ int complex16_abj_amp(int16_t *a, int16_t *b, int16_t *abj, int16_t *amp, int co
 		__m128i ma2 = _mm_loadu_si128(pa+1);
 		__m128i mb1 = _mm_loadu_si128(pb);
 		__m128i mb2 = _mm_loadu_si128(pb+1);
-		ma1 = _mm_srai_epi16(ma1, 8);
-		ma2 = _mm_srai_epi16(ma2, 8);
-		mb1 = _mm_srai_epi16(mb1, 8);
-		mb2 = _mm_srai_epi16(mb2, 8);
+		ma1 = _mm_srai_epi16(ma1, shift);
+		ma2 = _mm_srai_epi16(ma2, shift);
+		mb1 = _mm_srai_epi16(mb1, shift);
+		mb2 = _mm_srai_epi16(mb2, shift);
 
 		__m128i tmp1 = _mm_mullo_epi16(ma1, ma1);
 		__m128i tmp2 = _mm_mullo_epi16(ma2, ma2);		// RaRa IaIa ...
-		tmp2 = _mm_hadd_epi16(tmp1, tmp2);				// RaRa+IaIa ...
-		tmp2 = _mm_max_epi16(m_min, tmp2);				// at least 20*20
-		_mm_storeu_si128((__m128i*)(amp+i/2), tmp2);
+		__m128i tmp3 = _mm_hadd_epi16(tmp1, tmp2);		// RaRa+IaIa ...
+		tmp1 = _mm_mullo_epi16(mb1, mb1);
+		tmp2 = _mm_mullo_epi16(mb2, mb2);				// RbRb IbIb ...
+		tmp2 = _mm_hadd_epi16(tmp1, tmp2);				// RbRb+IbIb ...
+		tmp3 = _mm_max_epi16(tmp2, tmp3);				// max of a & b
+		tmp3 = _mm_max_epi16(m_min, tmp3);				// at least 20*20
+		_mm_storeu_si128((__m128i*)(amp+i/2), tmp3);
 
 		tmp1 = _mm_mullo_epi16(ma1, mb1);
 		tmp2 = _mm_mullo_epi16(ma2, mb2);				// RaRb IaIb ...
@@ -382,11 +392,25 @@ int fft_complex(complex *in, complex *out, bool ifft = false)
 		Q[i] = in[i].image;
 	}
 
-#if USE_FIXED_FFT == 1
-	fft_fixed(64, ifft, I, Q, IO, QO);
+	if (ifft)
+	{
+#if USE_FIXED_IFFT == 1
+		fft_fixed(64, ifft, I, Q, IO, QO);
 #else
-	fft_real_t(64, ifft, I, Q, IO, QO);
+		fft_real_t(64, ifft, I, Q, IO, QO);
 #endif
+
+	}
+
+	else
+	{
+#if USE_FIXED_FFT == 1
+		fft_fixed(64, ifft, I, Q, IO, QO);
+#else
+		fft_real_t(64, ifft, I, Q, IO, QO);
+#endif
+	}
+
 	for(int i=0; i<64; i++)
 	{
 		out[i].real = IO[i];
@@ -997,8 +1021,8 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 	int data_bit_per_symbol = bits_per_symbol * pun / 12;
 
 	float EVM = 0;
+	float peak_EVM = 0;
 
-	static complex h2[64];
 	for(int i=0; i<64; i++)
 	{
 		h[i].real = 1;
@@ -1010,14 +1034,14 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 	for(int i=0; i<data_symbol_count; i++)
 	{
 		// continual equalizing
-// 		for(int j=-26; j<26; j++)
-// 		{
-// 			if (j == 0 || j == -21 || j == 21 || j == 7 || j == -7)	// ignore DC/pilots
-// 				continue;
-// 			int n = j<0 ? j+64 : j;
-// 
-// 			symbols[i+1][n] *= h[n];
-// 		}
+		for(int j=-26; j<26; j++)
+		{
+			if (j == 0 || j == -21 || j == 21 || j == 7 || j == -7)	// ignore DC/pilots
+				continue;
+			int n = j<0 ? j+64 : j;
+
+			symbols[i+1][n] *= h[n];
+		}
 
 		// map bits
 		uint8_t *p = service_and_data_bits + bits_per_symbol*i;
@@ -1035,6 +1059,7 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 			h[n] = h[n]*(1-alpha) + _h * alpha;
 			float _EVM = (symbols[i+1][n] - remapped_symbol[n]).magnitude();
 			EVM += _EVM;
+			peak_EVM = max(peak_EVM, _EVM);
 		}
 
 		// deinterleave
@@ -1063,9 +1088,10 @@ int frame_decoding(complex * s, int sample_count, float frequency_offset, uint8_
 // 		}
 // 	}
 // 	fclose(constellation);
-
+// 
 	EVM /= 52*data_symbol_count;
-	printf("EVM>=%.1f%%(%.1fdb)\n", EVM*100, log10(EVM)*20);
+	printf("average EVM>=%.2f%%(%.1fdb)\n", EVM*100, log10(EVM)*20);
+	printf("peak EVM>=%.2f%%(%.1fdb)\n", peak_EVM*100, log10(peak_EVM)*20);
 
 	printf("sample_count = %d\n", sample_count);
 	fflush(stdout);
@@ -1137,6 +1163,15 @@ int tx(uint8_t *psdu, int count, complex **out, int mbps = 6)
 	complex *s = new complex[sample_count];
 	*out = s;
 
+
+	// prepare transient window
+	float transient_window[FFT_transient_time+1];
+	for(int i=0; i<FFT_transient_time/2; i++)
+	{
+		if (i<FFT_transient_time/2)
+			transient_window[i] = transient_window[FFT_transient_time-1-i] = pow(sin(PI/2*(i+1)/(FFT_transient_time/2+1)), 2);
+	}
+
 	// short training sequence
 	for(int i=0; i<160; i++)
 		s[i] = ST_time_space[i];
@@ -1196,7 +1231,13 @@ int tx(uint8_t *psdu, int count, complex **out, int mbps = 6)
 	for(int i=0; i<16; i++)
 		s[i+320] = signal_symbol_ifft[i+48];
 	for(int i=0; i<64; i++)
+	{
 		s[i+336] = signal_symbol_ifft[i];
+
+		// apply transient windowing
+		if (i>63-FFT_transient_time/2)
+			s[i+336] = s[i+336] * transient_window[i-63-1+FFT_transient_time];
+	}
 
 	// data scrambling and add service field
 	uint8_t data_bits[4096*8] = {1, 1, 1, 1, 1, 1, 1, 0};		// we always use scrambler starting from all ones state
@@ -1262,11 +1303,21 @@ int tx(uint8_t *psdu, int count, complex **out, int mbps = 6)
 		// ifft
 		fft_complex(symbol_fre, symbol_time, true);
 
-		// out: GI + symbol
-		for(int j=0; j<16; j++)
-			s[400+i*80+j] = symbol_time[j+48];		// 400: ST+LT+SIGNAL
+		// out: GI + symbol + transient time
+		for(int j=-FFT_transient_time/2; j<16; j++)
+		{
+			float scale = 1;
+			if (j<0)
+				scale = transient_window[FFT_transient_time/2+j];
+			s[400+i*80+j] += symbol_time[j+48]*scale;		// 400: ST+LT+SIGNAL
+		}
 		for(int j=0; j<64; j++)
-			s[400+i*80+16+j] = symbol_time[j];		// 400: ST+LT+SIGNAL
+		{
+			float scale = 1;
+			if (j>=64-FFT_transient_time/2)
+				scale = transient_window[j-64+FFT_transient_time];
+			s[400+i*80+16+j] = symbol_time[j]*scale;		// 400: ST+LT+SIGNAL
+		}
 	}
 
 
@@ -1280,17 +1331,32 @@ int tx(uint8_t *psdu, int count, complex **out, int mbps = 6)
 // 	}
 // 	fclose(f);
 // 
+	float avg = 0;
+	float peak = 0;
 	FILE * f = fopen("testcases/out_16bit.pcm", "wb");
+	float m = pow(2.0, 16-tx_effective_bits-1);
 	for(int i=0; i<sample_count; i++)
 	{
-		int m = 128;
-		int16_t I = int((s[i].real*3 + (rand()&0xff-127)*m/float(m*2)) / m) * m;
-		int16_t Q = int((s[i].image*3 + (rand()&0xff-127)*m/float(m*2)) / m) * m;
+		s[i].real = constrain(s[i].real*2.5, -32767, 32767);
+		s[i].image = constrain(s[i].image*2.5, -32767, 32767);
+
+		float n1 = rand()&0xff;
+		float n2 = rand()&0xff;
+		n1 = (n1-128) * m /127;
+		n2 = (n2-128) * m /127;
+		int16_t I = s[i].real + n1;
+		int16_t Q = s[i].image + n2;
 		fwrite(&Q, 1, 2, f);
 		fwrite(&I, 1, 2, f);
 
+		avg += s[i].magnitude();
+		peak = max(peak, s[i].magnitude());
 	}
+	avg /= sample_count;
 	fclose(f);
+
+	float par = peak / avg;
+	printf("PAR:%.3f(%.2fdb)\n", par, 20*log10(par));
 
 // 	uint8_t decoded_data[4096] = {0};
 // 	int decoded_count = 0;
@@ -1321,32 +1387,33 @@ int slice(int16_t *new_data, int count, bool flush = false)
 		memcpy(queue+queue_count, new_data, count*2);		
 		queue_count += count;
 	}
-	// SIMD complex multiply / amplitude
-	static FILE * f_blind = fopen("Z:\\blind_auto.pcm", "wb");
-	complex16_abj_amp(queue, queue+128, a, p, queue_count-160);
-	for(int i=0; i<(queue_count-160)/2-16; i++)
-	{
-		float moving_a[2] = {0};
-		float moving_p = 0;
-		for(int j=0; j<16; j++)
-		{
-			moving_a[0] += a[(i+j)*2];
-			moving_a[1] += a[(i+j)*2+1];
-			moving_p += p[(i+j)];
-		}
-		float amp = sqrt((double)moving_a[0]*moving_a[0]+moving_a[1]*moving_a[1]);
-		_auto[i] = amp / max(moving_p,20*20);
-	}
-	for(int i=0; i<(queue_count-160)/2; i++)
-	{
-		a[i] = _auto[i]*1000;
-	}
-	if (f_blind)
-	{
-	fwrite(a, 1, queue_count-160, f_blind);
-	fclose(f_blind);
-	f_blind = NULL;
-	}
+
+// 	// experimental blind OFDM time domain alignment
+// 	static FILE * f_blind = fopen("Z:\\blind_auto.pcm", "wb");
+// 	complex16_abj_amp(queue, queue+128, a, p, queue_count-160);
+// 	for(int i=0; i<(queue_count-160)/2-16; i++)
+// 	{
+// 		float moving_a[2] = {0};
+// 		float moving_p = 0;
+// 		for(int j=0; j<16; j++)
+// 		{
+// 			moving_a[0] += a[(i+j)*2];
+// 			moving_a[1] += a[(i+j)*2+1];
+// 			moving_p += p[(i+j)];
+// 		}
+// 		float amp = sqrt((double)moving_a[0]*moving_a[0]+moving_a[1]*moving_a[1]);
+// 		_auto[i] = amp / max(moving_p,20*20);
+// 	}
+// 	for(int i=0; i<(queue_count-160)/2; i++)
+// 	{
+// 		a[i] = _auto[i]*1000;
+// 	}
+// 	if (f_blind)
+// 	{
+// 	fwrite(a, 1, queue_count-160, f_blind);
+// 	fclose(f_blind);
+// 	f_blind = NULL;
+// 	}
 
 	// SIMD complex multiply / amplitude
 	complex16_abj_amp(queue, queue+32, a, p, queue_count-32);
@@ -1372,7 +1439,7 @@ int slice(int16_t *new_data, int count, bool flush = false)
 		if (auto_denum > 0)
 		{
 			int auto10000 = (moving_avg_a[0]/64*moving_avg_a[0]+moving_avg_a[1]/64*moving_avg_a[1]) / auto_denum;
-			static int threshold = (0.8*0.8)*1000;
+			static int threshold = (0.2*0.2)*1000;
 
 			if (auto10000 > threshold)
 				counter ++;
@@ -1463,8 +1530,216 @@ int slice(int16_t *new_data, int count, bool flush = false)
 	return count;
 }
 
+int to_COE()
+{
+	FILE * f = fopen("Z:\\test.bmp.raw", "rb");
+	fseek(f, 0, SEEK_END);
+	int size = ftell(f);
+	uint8_t *p = new uint8_t[size];
+	fseek(f, 0, SEEK_SET);
+	fread(p, 1, size, f);
+	fclose(f);
+
+	f = fopen("Z:\\test.bmp.coe", "wb");
+	fprintf(f, "memory_initialization_radix=16;\n");
+	fprintf(f, "memory_initialization_vector=\n");
+	for(int i=0; i<size; i+=3)
+	{
+		int v = (p[i] << 16) | (p[i+1] << 8) | (p[i+2] << 0);
+		fprintf(f, "%06x,\n", v);
+	}
+	fclose(f);
+	return 0;
+}
+
+int nt(int n)
+{
+	if (n == 1)
+		return 1;
+	return n* nt(n-1);
+}
+
+int16_t source[44100*50][2];
+int tmp[44100*100];
+int c[44100*100];
+int y[44100*100];
+int16_t y2[44100*100];
+int CIC_test()
+{
+	for(int i=0; i<44100*50; i++)
+	{
+		source[i][0] = ((rand()&0xff)<<8) | (rand()&0xff);
+		source[i][0] = sin(i*2*PI*18000/44100)*32000 + (rand()&0xff-128)/256.0;
+	}
+
+	int N = 7;		// number of comb/integrator
+	int R = 3;		// interpolation factor
+
+	memset(c, 0, sizeof(c));
+
+	// comb 
+	for(int i=0; i<44100*100; i++)
+		c[i] = source[i][0];
+
+	for(int j = 0; j<N; j++)
+	{
+		tmp[0] = c[0];
+		for(int i=1; i<44100*100; i++)
+		{
+			tmp[i] = int(c[i]) - int(c[i-1]);		
+		}
+		memcpy(c, tmp, sizeof(c));
+	}
+
+	if (1)
+	{
+		// zero stuffer rate changer
+		for(int i=44100*100-R; i>=0; i-=R)
+		{
+			c[i] = c[i/R];
+			for(int j=1; j<R; j++)
+				c[i+j] = 0;
+		}
+	}
+
+	else
+	{
+		// repeater rate changer
+		for(int i=44100*100-R; i>=0; i-=R)
+		{
+			c[i] = c[i/R]/R;
+			for(int j=1; j<R; j++)
+				c[i+j] = c[i];
+		}
+	}
+
+	// integrator
+	memcpy(y, c, sizeof(c));
+	for(int j=0; j<N; j++)
+	{
+		tmp[0] = y[0];
+		for(int i=1; i<44100*100; i++)
+		{
+			tmp[i] = tmp[i-1] + y[i];
+		}
+		memcpy(y, tmp, sizeof(y));
+	}
+
+	int peak = 0;
+	int gain = pow((float)R, (float)N);
+	int gain_bits = ceil(log((float)gain)/log(2.0))-2;
+	for(int i=0; i<44100*50; i++)
+	{
+		int v = (y[i] >> gain_bits);
+		//assert(-32768 <= v && v <= 32767);
+		peak = max(peak, abs(v));
+		source[i][1] = v;
+	}
+
+	for(int i=0; i<44100*50; i+=R)
+	{
+		for(int j=0; j<R; j++)
+			source[i+j][1] = j==0?source[i/R][0]:0;
+	}
+
+// 	if (peak>32767)
+	printf("peak:%d, gain_bits:%d\n", peak, gain_bits);
+
+	FILE * f = fopen("Z:\\CIC.pcm", "wb");
+	fwrite(source, 1, sizeof(source), f);
+	fclose(f);
+
+	return 0;
+}
+
+int correlation_test()
+{
+	const int N = 1024;
+	int offset = -70;
+
+	complex A[N];
+	complex B[N];
+
+	for(int i=0; i<N; i++)
+	{
+		A[i].real = float(rand() - RAND_MAX/2)/RAND_MAX;
+		A[i].image = float(rand() - RAND_MAX/2)/RAND_MAX;
+	}
+
+	for(int i=0; i<N; i++)
+	{
+		int pos = i + offset;
+		if (pos < 0)
+			pos += N;
+		if (pos >= N)
+			pos -= N;
+			
+		B[pos] = A[i];
+	}
+
+	fft_complex_N(A, A, N, false);
+	fft_complex_N(B, B, N, false);
+
+	for(int i=0; i<N; i++)
+		A[i] = A[i] * B[i].conjugate();
+
+	fft_complex_N(A, A, N, true);
+
+	FILE * f = fopen("Z:\\corre.csv", "wb");
+	fprintf(f, "N, v\n");
+	for(int i=0; i<N; i++)
+	{
+		fprintf(f, "%d,%f\n", i, A[i].real);
+	}
+	fclose(f);
+
+	return 0;
+}
+
+int dsss2()
+{
+	FILE * f = fopen("Z:\\802.11b_beacon2.pcm", "rb");
+	fseek(f, 0, SEEK_END);
+	int size = ftell(f);
+	int count = size/4;
+	fseek(f, 0, SEEK_SET);
+	int16_t * data = new int16_t[count*2];
+	fread(data, 1, size, f);
+	fclose(f);
+
+	int v[11] = {1,1,1,-1,-1,-1,1,-1,-1,1,-1};
+
+	int bit = 0;
+
+	int oversample = 2;
+
+	for(int i=0; i<count; i++)
+	{
+		int k = i/oversample;
+
+		if (i%(11*oversample) == 0)
+			bit = (rand()&1) ? 1 : -1;
+
+		int mag = data[i*2]*data[i*2] + data[i*2+1]*data[i*2+1];
+		data[i*2] = sqrt((float)mag);
+		data[i*2] = v[k%11]*1024 * bit;
+		data[i*2+1] = -data[i*2];
+
+	}
+
+	f = fopen("Z:\\802.11b_beacon3.pcm", "wb");
+	fwrite(data, 1, size, f);
+	fclose(f);
+
+	return 0;
+}
+
 int main()
 {
+	//dsss2();
+	//correlation_test();
+	//CIC_test();
+	//to_COE();
 	complexQ15 q(16384,16384);
 	complexQ15 q2(16384,8192);
 	complexQ15 q3 = q2 / q;

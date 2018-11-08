@@ -140,7 +140,7 @@ int bits_to_BPSK_symbols(complex *symbols, uint8_t *bits)
 int bits_to_QPSK_symbols(complex *symbols, uint8_t *bits)
 {
 	int j = 0;
-	static float level = sqrt(2.0);
+	static float level = sqrt(2.0)/2;
 	static complex tbl[4] =
 	{
 		complex(-level, level),			// WTF? image reversed?
